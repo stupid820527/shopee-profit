@@ -189,7 +189,11 @@ function parseIncomeRows(rows){
   for(const r of rows.slice(hi+1)){
     if(!r||!g(r,'訂單編號'))continue;
     out.push({id:String(g(r,'訂單編號')),date:toDate(g(r,'訂單成立日期')),paid:toDate(g(r,'錢包入帳日期')),orig:N(g(r,'商品原價')),promo:N(g(r,'賣場商品促銷折扣')),
-      refund:N(g(r,'退款金額')),returnShip:N(g(r,'退貨運費')),payout:N(g(r,'錢包入帳金額'))});
+      refund:N(g(r,'退款金額')),returnShip:N(g(r,'退貨運費')),payout:N(g(r,'錢包入帳金額')),
+      commission:N(g(r,'成交手續費')),service:N(g(r,'其他服務費')),payfee:N(g(r,'金流與系統處理費')),ams:N(g(r,'AMS推廣費用')),
+      coupon:N(g(r,'賣家負擔優惠券'))+N(g(r,'賣家負擔共資券'))+N(g(r,'賣家負擔蝦幣回饋券'))+N(g(r,'賣家負擔蝦幣回饋共資券')),
+      method:String(g(r,'買家付款方式')||'其他'),rate:String(g(r,'金流與系統處理費率')||''),
+      buyerShip:N(g(r,'買家支付運費')),shipSub:N(g(r,'蝦皮補助運費')),shipPaid:N(g(r,'蝦皮代付運費')),comp:N(g(r,'損失賠償'))});
   }
   return {orders:out,start,end};
 }
@@ -239,11 +243,12 @@ function sameContent(slip,items){
 }
 function analyze({cost,income,orderItems,overrides={},fixed=48000,target=0.07}){
   const lines=cost.map(l=>{
-    const ov=overrides[l.prodno];
-    const sourp=ov!=null&&ov!==''?N(ov):l.sourp;
-    const bad=(ov==null||ov==='')&&!(l.sourp>0);
-    const odd=!bad&&(ov==null||ov==='')&&l.sourp>l.price; // set piece or unit mismatch: keep real cost, list for review
-    return {...l,sourp,bad,odd,ov:ov!=null&&ov!==''};
+    // a filled-in cost is used only while the system still has no cost; once the system has one, the system wins
+    const has=overrides[l.prodno]!=null&&overrides[l.prodno]!==''&&!(l.sourp>0);
+    const sourp=has?N(overrides[l.prodno]):l.sourp;
+    const bad=!has&&!(l.sourp>0);
+    const odd=!has&&!bad&&l.sourp>l.price; // set piece or unit mismatch: keep real cost, list for review
+    return {...l,sourp,bad,odd,ov:has};
   });
   let cs=0,ss=0;lines.forEach(l=>{if(!l.bad&&!l.odd){cs+=l.sourp*l.qty;ss+=l.sum}});
   const ratio=ss?cs/ss:0.72;
@@ -511,7 +516,8 @@ const ymd=d=>d?`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${S
 const md=d=>d?`${d.getMonth()+1}/${d.getDate()}`:'';
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 const st={inc:null,ord:null,ordInfo:[],cost:null,costInfo:[],cloud:null,res:null,tab:'orders',filter:'all',q:'',removed:new Set()};
-let overrides=LS.get('costOverrides',{});
+let ovr=LS.get('costOverrides2',{}); // {商品編號:{cost,name,at}}
+const ovNums=()=>Object.fromEntries(Object.entries(ovr).map(([k,v])=>[k,v.cost]));
 const SHEET_URL='https://script.google.com/macros/s/AKfycbxEQ4CodEnrbQJ4MhtGHNrR-wyzmT3q2KMFYu6Dy7X03M7PhcmQtIj3Us2j6WmuFY7tHQ/exec';
 
 // settings
@@ -541,6 +547,7 @@ async function loadCloud(){
     const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key','')));
     const j=await r.json();if(!j.ok)throw new Error(j.error||'讀取失敗');
     st.cloud=j;
+    if(j.overrides){ovr={};j.overrides.forEach(r=>{if(r[0]&&r[2]!=='')ovr[String(r[0])]={name:r[1],cost:N(r[2]),at:r[3]}});LS.set('costOverrides2',ovr)}
     $('#cloud').textContent=`Google Sheet：上次保留訂單 ${j.pendingOrders.length} 筆、銷貨單 ${new Set(j.pendingLines.map(x=>x[0])).size} 張。`;
   }catch(e){$('#cloud').textContent='讀不到 Google Sheet：'+e.message+'（請檢查設定裡的網址）'}
   run();
@@ -642,7 +649,10 @@ function run(){
   }
   const {orders,cost,M}=inputs();
   const fixed=N(LS.get('fixed',48000));
-  st.res=analyze({cost,income:{orders,start:M.start,end:M.end},orderItems:st.ord,overrides,fixed,target:0.07});
+  st.res=analyze({cost,income:{orders,start:M.start,end:M.end},orderItems:st.ord,overrides:ovNums(),fixed,target:0.07});
+  // system now has its own cost for some filled-in items: drop those
+  const fixedNow=Object.keys(ovr).filter(k=>st.cost.some(l=>l.prodno===k&&l.sourp>0));
+  if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
   st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
   const notes=[];
   if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
@@ -651,6 +661,21 @@ function run(){
   clearTimeout(st.autoT);st.autoT=setTimeout(()=>save(true),600);
 }
 
+function feeBreakdown(ords){
+  const o=ords.filter(x=>!x.carried);const S=k=>o.reduce((s,x)=>s+(x[k]||0),0);
+  const base=o.reduce((s,x)=>s+x.orig+x.promo+x.refund,0);
+  const total=o.reduce((s,x)=>s+x.payout-(x.orig+x.promo+x.refund),0);
+  const rows=[['成交手續費',S('commission')],['免運服務費（每單 $60）',S('service')],['金流與系統處理費（刷卡、付款）',S('payfee')]];
+  if(S('ams'))rows.push(['AMS 推廣費用',S('ams')]);if(S('coupon'))rows.push(['賣家負擔優惠券',S('coupon')]);
+  const shipNet=S('buyerShip')+S('shipSub')+S('shipPaid')+S('returnShip');
+  rows.push(['運費（自付部分，含退貨運費）',shipNet]);
+  const known=rows.reduce((s,r)=>s+r[1],0)+S('comp');if(S('comp'))rows.push(['損失賠償（蝦皮賠給你）',S('comp')]);
+  if(Math.abs(total-known)>=1)rows.push(['其他',total-known]);
+  const pm=new Map();o.forEach(x=>{const k=x.method;const p=pm.get(k)||{n:0,amt:0,fee:0,rates:new Set()};p.n++;p.amt+=x.orig+x.promo+x.refund;p.fee+=x.payfee;if(x.rate)p.rates.add(x.rate);pm.set(k,p)});
+  const pay=[...pm.entries()].sort((a,b)=>b[1].amt-a[1].amt).map(([k,p])=>[k,p.n,p.amt,p.fee,[...p.rates].join('、')]);
+  const ship=[['買家付的運費',S('buyerShip')],['蝦皮補助運費',S('shipSub')],['蝦皮代付運費（物流費）',S('shipPaid')],['退貨運費',S('returnShip')],['合計（你實際負擔）',shipNet]];
+  return {base,total,rows,pay,ship,orders:o.length};
+}
 // one shape for both a fresh calculation and a result loaded from Google Sheet
 function liveVM(){
   const r=st.res,M=st.M,T=r.T;
@@ -663,7 +688,8 @@ function liveVM(){
       cost:ok?o.cost:null,profit:ok?o.profit:null,missing:(o.missing||[]).join('、'),flags:o.flags.filter(x=>x[0]!=='有商品缺進價'),carried:!!o.carried,ok}}),
     po:po.map(o=>({date:ymd(o.date),id:o.id,payout:o.payout,why:o.why,since:o.since||'',cand:o.cand.map(s=>`${s.bline}（${md(s.date)}・${fm(s.total)}）${s.items}`)})),
     ps:ps.map(s=>({date:ymd(s.date),bline:s.bline,total:s.total,items:s.items,why:s.why,lv:s.lv,since:s.since||''})),
-    missing:r.missing.map(m=>({prodno:m.prodno,name:m.name,spec:m.spec,price:m.price,qty:m.qty}))};
+    missing:r.missing.map(m=>({prodno:m.prodno,name:m.name,spec:m.spec,price:m.price,qty:m.qty})),
+    fees:feeBreakdown(r.orders)};
 }
 function showSnapshot(){
   const snap=st.cloud&&st.cloud.snapshot;
@@ -678,17 +704,32 @@ const md2=s=>s?String(s).slice(5).replace(/^0/,'').replace('/0','/'):'';
 function render(){
   const v=st.vm,T=v.T;
   $('#kpis').innerHTML=[
-    [`${v.month} 實際入帳`,fm(T.payout),`${T.orders} 張訂單・蝦皮扣 ${fm(Math.abs(T.fee))}`],
+    [`${v.month} 實際入帳`,fm(T.payout),`${T.orders} 張訂單`],
+    ['蝦皮總共扣',fm(Math.abs(T.fee)),v.fees&&v.fees.base?`佔營業額 ${pc(Math.abs(v.fees.total)/v.fees.base)}`:''],
     ['成本',fm(T.cost),'對到的訂單'],
     ['利潤',fm(T.profit),T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
     ['淨利',fm(T.net),`再扣固定成本 ${fm(v.fixed)}`,true],
-    ['待下次對帳',`${v.po.length} ／ ${v.ps.length}`,'訂單 ／ 銷貨單']
+    ['待下次對帳',`${v.po.length} 筆 ／ ${v.ps.length} 張`,'沒對到的蝦皮訂單 ／ 還沒入帳的銷貨單']
   ].map(([l,x,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(x).startsWith('-')?' neg':''}">${x}</span><span class="s">${esc(s)}</span></div>`).join('');
   $('#b-save').hidden=!st.live;
-  const tabs=[['orders','每筆訂單',v.orders.length],['pending','待下次對帳',v.po.length+v.ps.length],['missing','缺進價',v.missing.length]];
+  const tabs=[['orders','每筆訂單',v.orders.length],['fees','蝦皮費用',''],['pending','待下次對帳',v.po.length+v.ps.length],['missing','缺進價',v.missing.length]];
   $('#tabs').innerHTML=tabs.map(([k,n,c])=>`<button class="tab" aria-selected="${st.tab===k}" data-k="${k}">${n}<span class="c">${c}</span></button>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.filter='all';st.q='';render()});
-  ({orders:rOrders,pending:rPending,missing:rMissing})[st.tab]();
+  ({orders:rOrders,fees:rFees,pending:rPending,missing:rMissing})[st.tab]();
+}
+const pc=x=>(x*100).toFixed(1)+'%';
+function rFees(){
+  const F=st.vm.fees;if(!F){$('#panel').innerHTML='<p class="help">這份舊的結果沒有費用明細，重新上傳檔案算一次就會有。</p>';return}
+  const p=x=>F.base?pc(Math.abs(x)/F.base):'';
+  $('#panel').innerHTML=`<p class="help">${F.orders} 張訂單，營業額（扣退款）${fm(F.base)} 元。百分比都是佔營業額。</p>
+  <h2>蝦皮扣款明細</h2><div class="tbl"><table><thead><tr><th>項目</th><th class="r">金額</th><th class="r">佔營業額</th></tr></thead><tbody>
+  ${F.rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="r ${r[1]<0?'neg':''}">${fm(r[1])}</td><td class="r">${p(r[1])}</td></tr>`).join('')}
+  <tr><td><b>合計</b></td><td class="r neg"><b>${fm(F.total)}</b></td><td class="r"><b>${p(F.total)}</b></td></tr></tbody></table></div>
+  <h2>刷卡、付款方式</h2><div class="tbl"><table><thead><tr><th>付款方式</th><th class="r">訂單數</th><th class="r">金額</th><th class="r">金流處理費</th><th class="r">實際費率</th><th>蝦皮費率</th></tr></thead><tbody>
+  ${F.pay.map(r=>`<tr><td>${esc(r[0])}</td><td class="r">${r[1]}</td><td class="r">${fm(r[2])}</td><td class="r neg">${fm(r[3])}</td><td class="r">${r[2]?pc(Math.abs(r[3])/r[2]):''}</td><td>${esc(r[4])}</td></tr>`).join('')}</tbody></table></div>
+  <h2>運費</h2><div class="tbl"><table><thead><tr><th>項目</th><th class="r">金額</th></tr></thead><tbody>
+  ${F.ship.map((r,i)=>`<tr${i===F.ship.length-1?' style="font-weight:700"':''}><td>${esc(r[0])}</td><td class="r ${r[1]<0?'neg':''}">${fm(r[1])}</td></tr>`).join('')}</tbody></table></div>
+  <p class="help">運費：蝦皮先代付物流費，再用「買家付的運費＋蝦皮補助」抵掉，剩下的差額和退貨運費才是你自己出的。</p>`;
 }
 const pills=fl=>fl.map(([t,l])=>`<span class="pill p-${l}">${esc(t)}</span>`).join('');
 const isCheck=o=>o.flags.some(x=>x[1]==='warn'||x[1]==='bad');
@@ -726,13 +767,28 @@ function rPending(){
   $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);st.vm=liveVM();render();saveSoon()});
 }
 function rMissing(){
-  const list=st.vm.missing;
-  $('#panel').innerHTML=`<p class="help">系統進價是 0，先用平均成本率估算。${st.live?'在這裡填正確的未稅進價會馬上重算，':''}也請回系統補上。</p>
-  <div class="tbl"><table><thead><tr><th>商品編號</th><th>品名</th><th class="r">售價</th><th class="r">數量</th>${st.live?'<th>填進價</th>':''}</tr></thead><tbody>${
-  list.map(m=>`<tr><td class="num">${esc(m.prodno)}</td><td>${esc(m.name)} <span class="help">${esc(m.spec)}</span></td><td class="r">${fm(m.price)}</td><td class="r">${m.qty}</td>
-  ${st.live?`<td><input class="cost" type="number" step="0.01" data-p="${esc(m.prodno)}" aria-label="${esc(m.name)} 進價"></td>`:''}</tr>`).join('')||'<tr><td colspan="5">沒有缺進價的商品。</td></tr>'
-  }</tbody></table></div>`;
-  $('#panel').querySelectorAll('input.cost').forEach(i=>i.onchange=()=>{if(i.value==='')return;overrides[i.dataset.p]=N(i.value);LS.set('costOverrides',overrides);run()});
+  const list=st.vm.missing.filter(m=>!ovr[m.prodno]),filled=Object.entries(ovr).sort((a,b)=>String(b[1].at).localeCompare(String(a[1].at)));
+  $('#panel').innerHTML=`<p class="help">系統進價是 0 的商品，先用平均成本率估算。填入正確的未稅進價會存到 Google Sheet，大家共用，之後每次對帳都會用；等系統成本表有了進價，就改用系統的。</p>
+  <h2>還沒補的（${list.length}）</h2>
+  <div class="tbl"><table><thead><tr><th>商品編號</th><th>品名</th><th class="r">售價</th><th class="r">數量</th><th>填進價</th></tr></thead><tbody>${
+  list.map(m=>`<tr class="chk"><td class="num">${esc(m.prodno)}</td><td>${esc(m.name)} <span class="help">${esc(m.spec)}</span></td><td class="r">${fm(m.price)}</td><td class="r">${m.qty}</td>
+  <td><input class="cost" type="number" step="0.01" data-p="${esc(m.prodno)}" data-n="${esc(m.name)}" aria-label="${esc(m.name)} 進價"></td></tr>`).join('')||'<tr><td colspan="5">都補好了。</td></tr>'
+  }</tbody></table></div>
+  <h2>已經補的（${filled.length}）</h2>
+  <div class="tbl"><table><thead><tr><th>商品編號</th><th>品名</th><th>進價（可修改）</th><th>填寫時間</th><th></th></tr></thead><tbody>${
+  filled.map(([k,v])=>`<tr><td class="num">${esc(k)}</td><td>${esc(v.name)}</td><td><input class="cost" type="number" step="0.01" value="${v.cost}" data-p="${esc(k)}" data-n="${esc(v.name)}" aria-label="${esc(v.name)} 進價"></td><td class="num">${esc(v.at)}</td><td><button data-del="${esc(k)}">刪除</button></td></tr>`).join('')||'<tr><td colspan="5">還沒有。</td></tr>'
+  }</tbody></table></div>${st.ovrDropped?`<p class="help">有 ${st.ovrDropped} 項系統已經有進價了，已改用系統的並從這裡移除。</p>`:''}`;
+  $('#panel').querySelectorAll('input.cost').forEach(i=>i.onchange=()=>{if(i.value==='')return;const now=new Date();
+    ovr[i.dataset.p]={cost:N(i.value),name:i.dataset.n,at:`${ymd(now)} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`};changedOvr()});
+  $('#panel').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{delete ovr[b.dataset.del];changedOvr()});
+}
+function changedOvr(){LS.set('costOverrides2',ovr);saveOvr();if(st.live)run();else render()}
+async function saveOvr(){
+  const url=LS.get('url',SHEET_URL);if(!url)return;
+  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({key:LS.get('key',''),action:'overrides',overrides:Object.entries(ovr).map(([k,v])=>[k,v.name||'',v.cost,v.at||''])})});
+    const j=await r.json();if(!j.ok)throw new Error(j.error||'');}
+  catch(e){msg('補的進價沒有存到 Google Sheet：'+esc(e.message||'連線失敗'),'err')}
 }
 
 // save to Google Sheet (automatic after each calculation, and again after edits)
@@ -779,13 +835,17 @@ function styledSheet(header,rows,rowClass,moneyCols,widths){
 }
 $('#b-xlsx').onclick=()=>{
   const v=st.vm,T=v.T,wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],['固定成本',v.fixed],['淨利',Math.round(T.net)],['補對上次保留',T.carriedMatched],['待下次訂單',v.po.length],['待下次銷貨單',v.ps.length],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
+  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],['固定成本',v.fixed],['淨利',Math.round(T.net)],['補對上次保留',T.carriedMatched],['待下次訂單',v.po.length],['待下次銷貨單',v.ps.length],['蝦皮總共扣',Math.round(T.fee)],['蝦皮扣款佔營業額',v.fees&&v.fees.base?pc(Math.abs(v.fees.total)/v.fees.base):''],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
   const O=v.orders;
   XLSX.utils.book_append_sheet(wb,styledSheet(['訂單日','入帳日','蝦皮訂單編號','銷貨單號','商品','賣價','退款','蝦皮扣款','退貨運費','實際入帳','成本','利潤','缺進價','備註'],
     O.map(o=>[o.date,o.paid,o.id,o.bline,o.items,o.sale,o.refund,o.fee,o.rs,o.payout,o.ok?o.cost:'',o.ok?o.profit:'',o.missing,o.flags.map(x=>x[0]).join('；')]),
     i=>{const o=O[i];return !o.ok?'unm':o.profit<0?'loss':isCheck(o)?'chk':''},[5,6,7,8,9,10,11],[11,11,17,11,40,9,8,9,8,10,9,9,24,28]),'每筆訂單');
   XLSX.utils.book_append_sheet(wb,styledSheet(['訂單日','蝦皮訂單編號','實際入帳','原因','保留自','可能是這張'],v.po.map(o=>[o.date,o.id,o.payout,o.why,o.since||v.month,o.cand.join('\n')]),()=> 'unm',[2],[11,17,10,36,10,60]),'待下次訂單');
   XLSX.utils.book_append_sheet(wb,styledSheet(['開單日','銷貨單號','金額','商品','狀態','保留自'],v.ps.map(s=>[s.date,s.bline,s.total,s.items,s.why,s.since||v.month]),i=>v.ps[i].lv==='warn'?'chk':'',[2],[11,12,10,50,30,10]),'待下次銷貨單');
+  if(v.fees){const F=v.fees,pp=x=>F.base?Math.round(Math.abs(x)/F.base*1000)/10+'%':'';
+    const rows=[['【蝦皮扣款明細】','',''],...F.rows.map(r=>[r[0],Math.round(r[1]),pp(r[1])]),['合計',Math.round(F.total),pp(F.total)],['','',''],['【刷卡、付款方式】','金額','金流處理費／費率'],
+      ...F.pay.map(r=>[`${r[0]}（${r[1]} 張）`,Math.round(r[2]),`${Math.round(r[3])}（${r[2]?Math.round(Math.abs(r[3])/r[2]*1000)/10:0}%）`]),['','',''],['【運費】','金額',''],...F.ship.map(r=>[r[0],Math.round(r[1]),''])];
+    XLSX.utils.book_append_sheet(wb,styledSheet(['項目','金額','佔營業額'],rows,null,[1],[34,14,22]),'蝦皮費用');}
   XLSX.utils.book_append_sheet(wb,styledSheet(['商品編號','品名','規格','售價','數量'],v.missing.map(m=>[m.prodno,m.name,m.spec,m.price,m.qty]),null,[3],[18,30,22,9,8]),'缺進價');
   XLSX.writeFile(wb,`蝦皮利潤對帳_${v.month.replace('/','')}.xlsx`);
 };
