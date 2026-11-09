@@ -382,10 +382,12 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
   });
   const S=income.start,E=income.end;
   const unpaid=unused.sort((a,b)=>a.date-b.date).map(s=>{
-    let why='該入帳了卻沒對到，請核對（金額不同、退款或合併開單）',lv='warn';
-    if(s.carried){why='上次保留，還沒入帳';lv='keep'}
-    else if(S&&s.date<new Date(+S-3*DAY)){why='開單日在這期之前，應該上一期已入帳';lv='drop'}
-    else if(E&&s.date>new Date(+E-12*DAY)){why='還沒入帳（下一期撥款）';lv='keep'}
+    // every unmatched invoice moves to the next reconciliation; only ones already carried over 2+ times need a look
+    let why='還沒入帳，轉到下次對帳',lv='keep';
+    const age=s.date&&E?Math.round((E-s.date)/DAY):0;
+    if(!s.carried&&S&&s.date<new Date(+S-3*DAY)){why='開單日在這期之前，應該上一期已入帳';lv='drop'}
+    else if(s.carried&&age>60){why=`開單已經 ${age} 天還沒入帳，請確認`;lv='warn'}
+    else if(s.carried)why='上次保留，還沒入帳，轉到下次對帳';
     return {...s,why,lv};
   });
   const m=ords.filter(o=>o.slip||o.noSlipRefund);
@@ -778,7 +780,7 @@ function render(){
     ['利潤',hide(T.profit),T.missingOrders?`還有 ${T.missingOrders} 筆缺進價`:T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
     ['淨利（稅前）',hide(T.profit-fixedTotal()),`再扣固定成本 ${fm(fixedTotal())}（可在「固定成本」調整）`],
     ['稅後淨利',hide(afterTax(T.profit-fixedTotal())),`預估所得稅 ${Math.round(taxRate()*100)}%`,true],
-    ['要核對',`${v.po.length+v.ps.filter(s=>s.lv==='warn').length}`,`另有 ${v.ps.filter(s=>s.lv!=='warn').length} 張銷貨單下月撥款，已轉到下月對帳`]
+    ['要核對',`${v.po.length+v.ps.filter(s=>s.lv==='warn').length}`,`另有 ${v.ps.filter(s=>s.lv!=='warn').length} 張銷貨單還沒入帳，已轉到下次對帳`]
   ].map(([l,x,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(x).startsWith('-')?' neg':''}">${x}</span><span class="s">${esc(s)}</span></div>`).join('');
   $('#b-save').hidden=!st.live;eyeBtn();
   const nm=v.missing.filter(m=>!ovr[m.prodno]).length;
@@ -865,17 +867,17 @@ function rOrders(){
 function rPending(){
   const {po}=st.vm,need=st.vm.ps.filter(s=>s.lv==='warn'),next=st.vm.ps.filter(s=>s.lv!=='warn');
   const rm=k=>st.live?`<button data-rm="${k}">移除</button>`:'';
-  $('#panel').innerHTML=`<p class="help">這裡只放需要你看的。下月才撥款的銷貨單不用處理，已經自動轉到下月對帳。</p>
+  $('#panel').innerHTML=`<p class="help">這裡只放需要你看的。還沒入帳的銷貨單都會自動轉到下次對帳；轉了兩個月以上還沒入帳的，才會列在這裡請你確認。</p>
   <h2>沒對到的蝦皮訂單（${po.length}）</h2>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">實際入帳</th><th>原因</th><th>可能是這張</th><th></th></tr></thead><tbody>${
   po.map(o=>`<tr class="unm"><td class="num">${md2(o.date)}</td><td class="num">${esc(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
   <td class="items">${o.cand.map(c=>`<div>${esc(c)}</div>`).join('')||'—'}</td><td>${rm('o'+esc(o.id))}</td></tr>`).join('')||'<tr><td colspan="6">沒有，全部都對上了。</td></tr>'
   }</tbody></table></div>
-  <h2>該入帳卻沒對到的銷貨單（${need.length}）</h2>
+  <h2>開單超過 60 天還沒入帳的銷貨單（${need.length}）</h2>
   <div class="tbl"><table><thead><tr><th>開單日</th><th>銷貨單號</th><th class="r">金額</th><th>商品</th><th></th></tr></thead><tbody>${
   need.map(s=>`<tr class="chk"><td class="num">${md2(s.date)}</td><td class="num">${esc(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td><td>${rm('s'+esc(s.bline))}</td></tr>`).join('')||'<tr><td colspan="5">沒有。</td></tr>'
   }</tbody></table></div>
-  <details><summary class="help" style="cursor:pointer">已轉到下月對帳的銷貨單（${next.length} 張，不用處理，點開查看）</summary>
+  <details><summary class="help" style="cursor:pointer">已轉到下次對帳的銷貨單（${next.length} 張，不用處理，點開查看）</summary>
   <div class="tbl" style="margin-top:8px"><table><thead><tr><th>開單日</th><th>銷貨單號</th><th class="r">金額</th><th>商品</th></tr></thead><tbody>${
   next.map(s=>`<tr><td class="num">${md2(s.date)}</td><td class="num">${esc(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}${s.since?`<div class="help">保留自 ${esc(s.since)}</div>`:''}</td></tr>`).join('')
   }</tbody></table></div></details>`;
