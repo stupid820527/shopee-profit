@@ -555,6 +555,8 @@ const st={inc:null,ord:null,ordInfo:[],cost:null,costInfo:[],cloud:null,res:null
 const FIXED_DEFAULT=[['薪資',30000],['全勤獎金',2000],['包貨獎金',3000],['勞健保、勞退（公司負擔）',6500],['寄貨車趟（油錢、車子）',4000],['紙箱、耗材',2500]];
 let fixedItems=LS.get('fixedItems',FIXED_DEFAULT);
 const fixedTotal=()=>fixedItems.reduce((s,r)=>s+N(r[1]),0);
+const taxRate=()=>N(LS.get('taxRate',20))/100;
+const afterTax=net=>net>0?net*(1-taxRate()):net;
 let ovr=LS.get('costOverrides2',{});
 try{localStorage.removeItem('master')}catch(e){}
 try{const m=JSON.parse(localStorage.getItem('master2')||'null');if(m){st.master=m.map;st.masterAt=m.at}}catch(e){} // {商品編號:{cost,name,at}}
@@ -774,7 +776,8 @@ function render(){
     ['蝦皮總共扣',fm(Math.abs(T.fee)),v.fees&&v.fees.base?`佔營業額 ${pc(Math.abs(v.fees.total)/v.fees.base)}`:''],
     ['成本',hide(T.cost),'對到的訂單'],
     ['利潤',hide(T.profit),T.missingOrders?`還有 ${T.missingOrders} 筆缺進價`:T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
-    ['淨利',hide(T.profit-fixedTotal()),`再扣固定成本 ${fm(fixedTotal())}（可在「固定成本」調整）`,true],
+    ['淨利（稅前）',hide(T.profit-fixedTotal()),`再扣固定成本 ${fm(fixedTotal())}（可在「固定成本」調整）`],
+    ['稅後淨利',hide(afterTax(T.profit-fixedTotal())),`預估所得稅 ${Math.round(taxRate()*100)}%`,true],
     ['要核對',`${v.po.length+v.ps.filter(s=>s.lv==='warn').length}`,`另有 ${v.ps.filter(s=>s.lv!=='warn').length} 張銷貨單下月撥款，已轉到下月對帳`]
   ].map(([l,x,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(x).startsWith('-')?' neg':''}">${x}</span><span class="s">${esc(s)}</span></div>`).join('');
   $('#b-save').hidden=!st.live;eyeBtn();
@@ -884,7 +887,10 @@ function rFixed(){
   ${fixedItems.map((r,i)=>`<tr><td><input class="fx-n" data-i="${i}" value="${esc(r[0])}" style="width:100%;font:inherit;border:1px solid var(--line);border-radius:6px;padding:4px 7px;background:var(--panel);color:var(--ink)" aria-label="項目名稱"></td>
   <td class="r"><input class="cost fx-v" data-i="${i}" type="number" step="100" value="${N(r[1])}" aria-label="${esc(r[0])} 金額"></td><td><button data-fx-del="${i}">刪除</button></td></tr>`).join('')}
   <tr class="tot"><td><b>合計</b></td><td class="r"><b>${fm(fixedTotal())}</b></td><td></td></tr></tbody></table></div>
-  <div class="actions"><button id="fx-add">＋ 新增項目</button><button id="fx-reset">恢復預設</button></div>`;
+  <div class="actions"><button id="fx-add">＋ 新增項目</button><button id="fx-reset">恢復預設</button></div>
+  <h2>預估所得稅</h2><div class="row"><label class="field">所得稅率（%，以往經驗）<input id="i-tax" class="n" type="number" step="1" value="${Math.round(taxRate()*100)}"></label></div>
+  <p class="help">稅後淨利＝淨利 ×（1 − 所得稅率），只是估算；淨利是負的就不扣稅。實際以會計師申報為準。</p>`;
+  $('#i-tax').onchange=e=>{LS.set('taxRate',N(e.target.value));render()};
   const P=$('#panel');
   P.querySelectorAll('.fx-n').forEach(i=>i.onchange=()=>{fixedItems[+i.dataset.i][0]=i.value;changedFixed()});
   P.querySelectorAll('.fx-v').forEach(i=>i.onchange=()=>{fixedItems[+i.dataset.i][1]=N(i.value);changedFixed()});
@@ -970,7 +976,7 @@ function styledSheet(header,rows,rowClass,moneyCols,widths){
 }
 $('#b-xlsx').onclick=()=>{
   const v=st.vm,T=v.T,wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],...fixedItems.map(r=>['固定成本：'+r[0],N(r[1])]),['固定成本合計',fixedTotal()],['淨利',Math.round(T.profit-fixedTotal())],['補對上次保留',T.carriedMatched],['要核對（沒對到訂單＋該入帳沒對到的單）',v.po.length+v.ps.filter(s=>s.lv==='warn').length],['轉下月對帳的銷貨單',v.ps.filter(s=>s.lv!=='warn').length],['蝦皮總共扣',Math.round(T.fee)],['蝦皮扣款佔營業額',v.fees&&v.fees.base?pc(Math.abs(v.fees.total)/v.fees.base):''],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
+  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],...fixedItems.map(r=>['固定成本：'+r[0],N(r[1])]),['固定成本合計',fixedTotal()],['淨利（稅前）',Math.round(T.profit-fixedTotal())],['預估所得稅率',Math.round(taxRate()*100)+'%'],['稅後淨利',Math.round(afterTax(T.profit-fixedTotal()))],['補對上次保留',T.carriedMatched],['要核對（沒對到訂單＋該入帳沒對到的單）',v.po.length+v.ps.filter(s=>s.lv==='warn').length],['轉下月對帳的銷貨單',v.ps.filter(s=>s.lv!=='warn').length],['蝦皮總共扣',Math.round(T.fee)],['蝦皮扣款佔營業額',v.fees&&v.fees.base?pc(Math.abs(v.fees.total)/v.fees.base):''],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
   const O=v.orders;
   XLSX.utils.book_append_sheet(wb,styledSheet(['訂單日','入帳日','蝦皮訂單編號','銷貨單號','商品','商品金額','退款','成交手續費','其他服務費','金流處理費','買家付運費','蝦皮代付運費','蝦皮補助運費','退貨運費','其他','實際入帳','代開發票','蝦皮總共扣','扣%','成本','利潤','缺進價','備註'],
     O.map(o=>{const d=o.d||{},t=ded(o),b=o.sale+o.refund;return [o.date,o.paid,o.id,o.bline,o.items,o.sale,o.refund,d.commission??'',d.service??'',d.payfee??'',d.buyerShip??'',d.shipPaid??'',d.shipSub??'',d.returnShip??o.rs,d.other||'',o.payout,d.inv??'',t,b>0?Math.round(Math.abs(t)/b*1000)/10+'%':'',o.ok?o.cost:'',o.ok?o.profit:'',o.missing,o.flags.map(x=>x[0]).join('；')]}),
