@@ -6,13 +6,13 @@
 <title>蝦皮利潤對帳</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 /* 對帳工作台：上方三步驟，下方結果。鋼藍色重點，冷灰底。 */
 :root{
   --bg:#f3f5f7; --panel:#fff; --ink:#18222c; --muted:#5b6875; --line:#dde3e9; --soft:#eaf0f5;
   --accent:#1f5f8b; --accent-ink:#fff;
-  --good:#1e7a46; --good-bg:#e3f3e9; --warn:#9a6400; --warn-bg:#fdf1d8; --bad:#b3261e; --bad-bg:#fbe4e2;
+  --good:#1e7a46; --good-bg:#e3f3e9; --loss-bg:#fdeeee; --warn:#9a6400; --warn-bg:#fdf1d8; --bad:#b3261e; --bad-bg:#fbe4e2;
   --f-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
   --f-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
   color-scheme:light;
@@ -20,7 +20,7 @@
 @media (prefers-color-scheme: dark){:root{
   --bg:#11171d; --panel:#18212a; --ink:#e6edf3; --muted:#9aa8b5; --line:#2b3742; --soft:#1f2b36;
   --accent:#5aa6d6; --accent-ink:#0b1620;
-  --good:#6fcf97; --good-bg:#16301f; --warn:#f2c46b; --warn-bg:#352a12; --bad:#ff8a80; --bad-bg:#3a1a18; color-scheme:dark}}
+  --good:#6fcf97; --good-bg:#16301f; --loss-bg:#2e1c1c; --warn:#f2c46b; --warn-bg:#352a12; --bad:#ff8a80; --bad-bg:#3a1a18; color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
@@ -78,6 +78,8 @@ td{padding:7px 10px;border-top:1px solid var(--line);vertical-align:top}
 .num{font-family:var(--f-num);font-variant-numeric:tabular-nums;white-space:nowrap}
 td.items{min-width:220px;max-width:380px}
 tr.unm td{background:var(--bad-bg)}
+tr.loss td{background:var(--loss-bg)}
+tr.chk td{background:var(--warn-bg)}
 .neg{color:var(--bad);font-weight:600}
 .pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;margin:1px 3px 1px 0;white-space:nowrap}
 .p-bad{background:var(--bad-bg);color:var(--bad)} .p-warn{background:var(--warn-bg);color:var(--warn)} .p-info{background:var(--soft);color:var(--muted)} .p-good{background:var(--good-bg);color:var(--good)}
@@ -634,110 +636,158 @@ function inputs(){
 }
 
 function run(){
-  if(!(st.inc&&st.ord&&st.cost)){$('#result').hidden=true;const miss=[!st.inc&&'進帳報表',!st.ord&&'訂單報表',!st.cost&&'成本表'].filter(Boolean);if(st.inc||st.ord||st.cost)msg('還差：'+miss.join('、'));return}
+  if(!(st.inc&&st.ord&&st.cost)){
+    if(st.inc||st.ord||st.cost){const miss=[!st.inc&&'進帳報表',!st.ord&&'訂單報表',!st.cost&&'成本表'].filter(Boolean);msg('還差：'+miss.join('、'))}
+    showSnapshot();return;
+  }
   const {orders,cost,M}=inputs();
   const fixed=N(LS.get('fixed',48000));
   st.res=analyze({cost,income:{orders,start:M.start,end:M.end},orderItems:st.ord,overrides,fixed,target:0.07});
-  st.M=M;st.fixed=fixed;
-  const inLog=st.cloud&&st.cloud.log.some(r=>r[0]===M.key);
-  const notes=[];if(inLog)notes.push(`${M.key} 已經存過一次，再按儲存會覆蓋那個月的紀錄。`);if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
+  st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
+  const notes=[];
+  if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
   msg(notes.join('<br>'),notes.length?'warn':'');
   $('#result').hidden=false;render();
+  clearTimeout(st.autoT);st.autoT=setTimeout(()=>save(true),600);
 }
 
-function pending(){
-  const r=st.res,M=st.M;
+// one shape for both a fresh calculation and a result loaded from Google Sheet
+function liveVM(){
+  const r=st.res,M=st.M,T=r.T;
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
   const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
-  return {po,ps,M};
+  return {month:M.key,savedAt:'',fixed:st.fixed,
+    T:{orders:T.orders,payout:T.payout,fee:T.fee+T.returnShip,cost:T.cost,profit:T.profit,net:T.net,carriedMatched:T.carriedMatched},
+    orders:r.orders.map(o=>{const ok=!!(o.slip||o.noSlipRefund);return {date:ymd(o.date),paid:ymd(o.paid),id:o.id,bline:o.slip?o.slip.bline:'',
+      items:o.slip?o.slip.items:o.noSlipRefund?'（全額退貨）':'（沒對到銷貨單）',sale:o.sale,refund:o.refund,fee:o.fee,rs:o.returnShip,payout:o.payout,
+      cost:ok?o.cost:null,profit:ok?o.profit:null,missing:(o.missing||[]).join('、'),flags:o.flags.filter(x=>x[0]!=='有商品缺進價'),carried:!!o.carried,ok}}),
+    po:po.map(o=>({date:ymd(o.date),id:o.id,payout:o.payout,why:o.why,since:o.since||'',cand:o.cand.map(s=>`${s.bline}（${md(s.date)}・${fm(s.total)}）${s.items}`)})),
+    ps:ps.map(s=>({date:ymd(s.date),bline:s.bline,total:s.total,items:s.items,why:s.why,lv:s.lv,since:s.since||''})),
+    missing:r.missing.map(m=>({prodno:m.prodno,name:m.name,spec:m.spec,price:m.price,qty:m.qty}))};
 }
+function showSnapshot(){
+  const snap=st.cloud&&st.cloud.snapshot;
+  if(!snap){if(!st.live)$('#result').hidden=true;return}
+  try{st.vm=JSON.parse(snap)}catch(e){return}
+  st.live=false;$('#result').hidden=false;
+  if(!$('#msg').textContent)msg(`目前顯示的是 ${esc(st.vm.savedAt)} 存的 <b>${esc(st.vm.month)}</b> 對帳結果。上傳新的檔案就會重新計算並取代。`);
+  render();
+}
+
+const md2=s=>s?String(s).slice(5).replace(/^0/,'').replace('/0','/'):'';
 function render(){
-  const {T}=st.res;const {po,ps}=pending();
+  const v=st.vm,T=v.T;
   $('#kpis').innerHTML=[
-    ['本月實際入帳',fm(T.payout),`${T.orders} 張訂單・蝦皮扣 ${fm(Math.abs(T.fee+T.returnShip))}`],
+    [`${v.month} 實際入帳`,fm(T.payout),`${T.orders} 張訂單・蝦皮扣 ${fm(Math.abs(T.fee))}`],
     ['成本',fm(T.cost),'對到的訂單'],
     ['利潤',fm(T.profit),T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
-    ['淨利',fm(T.net),`再扣固定成本 ${fm(st.fixed)}`,true],
-    ['待下次對帳',`${po.length} ／ ${ps.length}`,'訂單 ／ 銷貨單']
-  ].map(([l,v,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(v).startsWith('-')?' neg':''}">${v}</span><span class="s">${esc(s)}</span></div>`).join('');
-  const tabs=[['orders','每筆訂單',st.res.orders.length],['pending','待下次對帳',po.length+ps.length],['missing','缺進價',st.res.missing.length]];
+    ['淨利',fm(T.net),`再扣固定成本 ${fm(v.fixed)}`,true],
+    ['待下次對帳',`${v.po.length} ／ ${v.ps.length}`,'訂單 ／ 銷貨單']
+  ].map(([l,x,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(x).startsWith('-')?' neg':''}">${x}</span><span class="s">${esc(s)}</span></div>`).join('');
+  $('#b-save').hidden=!st.live;
+  const tabs=[['orders','每筆訂單',v.orders.length],['pending','待下次對帳',v.po.length+v.ps.length],['missing','缺進價',v.missing.length]];
   $('#tabs').innerHTML=tabs.map(([k,n,c])=>`<button class="tab" aria-selected="${st.tab===k}" data-k="${k}">${n}<span class="c">${c}</span></button>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.filter='all';st.q='';render()});
   ({orders:rOrders,pending:rPending,missing:rMissing})[st.tab]();
 }
 const pills=fl=>fl.map(([t,l])=>`<span class="pill p-${l}">${esc(t)}</span>`).join('');
+const isCheck=o=>o.flags.some(x=>x[1]==='warn'||x[1]==='bad');
 function rOrders(){
   const f=st.filter,q=st.q.trim().toLowerCase();
-  const list=st.res.orders.filter(o=>{
+  const list=st.vm.orders.filter(o=>{
     if(f==='loss'&&!(o.profit<0))return false;
-    if(f==='check'&&!o.flags.some(x=>x[1]==='warn'||x[1]==='bad'))return false;
+    if(f==='check'&&!isCheck(o))return false;
     if(f==='carried'&&!o.carried)return false;
-    if(q&&!(o.id.toLowerCase().includes(q)||(o.slip&&o.slip.items.toLowerCase().includes(q))))return false;
+    if(q&&!(o.id.toLowerCase().includes(q)||o.items.toLowerCase().includes(q)))return false;
     return true});
   $('#panel').innerHTML=`<div class="filters">${[['all','全部'],['loss','賠錢'],['check','要看一下'],['carried','上次保留']].map(([k,n])=>`<button class="chip" aria-pressed="${f===k}" data-f="${k}">${n}</button>`).join('')}
   <input class="search" id="q" type="search" placeholder="搜尋訂單編號、商品" value="${esc(st.q)}"></div>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th>商品</th><th class="r">實際入帳</th><th class="r">成本</th><th class="r">利潤</th><th>備註</th></tr></thead><tbody>${
-  list.map(o=>{const ok=o.slip||o.noSlipRefund;return `<tr class="${ok?'':'unm'}"><td class="num">${md(o.date)}</td><td class="num">${esc(o.id)}</td>
-  <td class="items">${o.slip?esc(o.slip.items):o.noSlipRefund?'（全額退貨）':'（沒對到銷貨單）'}${o.missing&&o.missing.length?`<div class="miss">缺進價：${esc(o.missing.join('、'))}</div>`:''}</td>
-  <td class="r">${fm(o.payout)}</td><td class="r">${ok?fm(o.cost):''}</td><td class="r ${o.profit<0?'neg':''}">${ok?fm(o.profit):''}</td><td>${pills(o.flags.filter(x=>x[0]!=='有商品缺進價'))}</td></tr>`}).join('')
-  }</tbody></table></div><p class="help">顯示 ${list.length} 筆。利潤＝實際入帳 ÷ 1.05 − 成本。</p>`;
+  list.map(o=>`<tr class="${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}"><td class="num">${md2(o.date)}</td><td class="num">${esc(o.id)}</td>
+  <td class="items">${esc(o.items)}${o.missing?`<div class="miss">缺進價：${esc(o.missing)}</div>`:''}</td>
+  <td class="r">${fm(o.payout)}</td><td class="r">${o.ok?fm(o.cost):''}</td><td class="r ${o.profit<0?'neg':''}">${o.ok?fm(o.profit):''}</td><td>${pills(o.flags)}</td></tr>`).join('')
+  }</tbody></table></div><p class="help">顯示 ${list.length} 筆。紅底＝沒對到、粉紅底＝賠錢、黃底＝要看一下。利潤＝實際入帳 ÷ 1.05 − 成本。</p>`;
   $('#panel').querySelectorAll('.chip').forEach(b=>b.onclick=()=>{st.filter=b.dataset.f;render()});
   const qi=$('#q');qi.oninput=()=>{st.q=qi.value;clearTimeout(qi._t);qi._t=setTimeout(()=>{render();const n=$('#q');n.focus();n.setSelectionRange(n.value.length,n.value.length)},250)};
 }
 function rPending(){
-  const {po,ps}=pending();
-  $('#panel').innerHTML=`<p class="help">這些會存到 Google Sheet，下次對帳自動帶進來一起配。確定不用再追的可以按「移除」。</p>
+  const {po,ps}=st.vm;
+  $('#panel').innerHTML=`<p class="help">這些存在 Google Sheet，下次對帳自動帶進來一起配。${st.live?'確定不用再追的可以按「移除」。':''}</p>
   <h2>沒對到的訂單（${po.length}）</h2>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">實際入帳</th><th>原因</th><th>可能是這張</th><th></th></tr></thead><tbody>${
-  po.map(o=>`<tr><td class="num">${md(o.date)}</td><td class="num">${esc(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
-  <td class="items">${o.cand.map(s=>`<div><b class="num">${esc(s.bline)}</b>（${md(s.date)}・${fm(s.total)}）${esc(s.items)}</div>`).join('')||'—'}</td><td><button data-rm="o${esc(o.id)}">移除</button></td></tr>`).join('')||'<tr><td colspan="6">沒有。</td></tr>'
+  po.map(o=>`<tr class="unm"><td class="num">${md2(o.date)}</td><td class="num">${esc(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
+  <td class="items">${o.cand.map(c=>`<div>${esc(c)}</div>`).join('')||'—'}</td><td>${st.live?`<button data-rm="o${esc(o.id)}">移除</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6">沒有。</td></tr>'
   }</tbody></table></div>
   <h2>還沒入帳的銷貨單（${ps.length}）</h2>
   <div class="tbl"><table><thead><tr><th>開單日</th><th>銷貨單號</th><th class="r">金額</th><th>商品</th><th>狀態</th><th></th></tr></thead><tbody>${
-  ps.map(s=>`<tr><td class="num">${md(s.date)}</td><td class="num">${esc(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td>
-  <td><span class="pill p-${s.lv==='warn'?'warn':'info'}">${esc(s.why)}</span>${s.since?`<div class="help">保留自 ${esc(s.since)}</div>`:''}</td><td><button data-rm="s${esc(s.bline)}">移除</button></td></tr>`).join('')||'<tr><td colspan="6">沒有。</td></tr>'
+  ps.map(s=>`<tr class="${s.lv==='warn'?'chk':''}"><td class="num">${md2(s.date)}</td><td class="num">${esc(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td>
+  <td><span class="pill p-${s.lv==='warn'?'warn':'info'}">${esc(s.why)}</span>${s.since?`<div class="help">保留自 ${esc(s.since)}</div>`:''}</td><td>${st.live?`<button data-rm="s${esc(s.bline)}">移除</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6">沒有。</td></tr>'
   }</tbody></table></div>`;
-  $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);render()});
+  $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);st.vm=liveVM();render();saveSoon()});
 }
 function rMissing(){
-  const list=st.res.missing;
-  $('#panel').innerHTML=`<p class="help">系統進價是 0，先用平均成本率估算。在這裡填正確的未稅進價會馬上重算（記在這台電腦），也請回系統補上。</p>
-  <div class="tbl"><table><thead><tr><th>商品編號</th><th>品名</th><th class="r">售價</th><th class="r">數量</th><th>填進價</th></tr></thead><tbody>${
+  const list=st.vm.missing;
+  $('#panel').innerHTML=`<p class="help">系統進價是 0，先用平均成本率估算。${st.live?'在這裡填正確的未稅進價會馬上重算，':''}也請回系統補上。</p>
+  <div class="tbl"><table><thead><tr><th>商品編號</th><th>品名</th><th class="r">售價</th><th class="r">數量</th>${st.live?'<th>填進價</th>':''}</tr></thead><tbody>${
   list.map(m=>`<tr><td class="num">${esc(m.prodno)}</td><td>${esc(m.name)} <span class="help">${esc(m.spec)}</span></td><td class="r">${fm(m.price)}</td><td class="r">${m.qty}</td>
-  <td><input class="cost" type="number" step="0.01" data-p="${esc(m.prodno)}" aria-label="${esc(m.name)} 進價"></td></tr>`).join('')||'<tr><td colspan="5">沒有缺進價的商品。</td></tr>'
+  ${st.live?`<td><input class="cost" type="number" step="0.01" data-p="${esc(m.prodno)}" aria-label="${esc(m.name)} 進價"></td>`:''}</tr>`).join('')||'<tr><td colspan="5">沒有缺進價的商品。</td></tr>'
   }</tbody></table></div>`;
   $('#panel').querySelectorAll('input.cost').forEach(i=>i.onchange=()=>{if(i.value==='')return;overrides[i.dataset.p]=N(i.value);LS.set('costOverrides',overrides);run()});
 }
 
-// save
+// save to Google Sheet (automatic after each calculation, and again after edits)
+function saveSoon(){clearTimeout(st.autoT);st.autoT=setTimeout(()=>save(true),800)}
 function payload(){
-  const r=st.res,{po,ps,M}=pending(),T=r.T;
+  const r=st.res,M=st.M,T=r.T,v=st.vm;
+  const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
+  const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
   const done=r.orders.filter(o=>o.slip||o.noSlipRefund).map(o=>[o.id,o.slip?o.slip.bline:'']);
   const pendingOrders=po.map(o=>[o.id,ymd(o.date),ymd(o.paid),o.orig,o.promo,o.refund,o.returnShip,o.payout,o.since||M.key,o.why]);
   const pendingLines=[];ps.forEach(s=>s.lines.forEach(l=>pendingLines.push([s.bline,ymd(s.date),l.prodno,l.name,l.spec,l.qty,l.price,l.sum,l.sourp0??l.sourp,s.since||M.key,s.why])));
   const summary=[T.orders,Math.round(T.payout),Math.round(T.cost),Math.round(T.profit),st.fixed,Math.round(T.net),T.carriedMatched,po.length,ps.length];
-  return {key:LS.get('key',''),month:M.key,done,pendingOrders,pendingLines,summary};
+  const now=new Date();const snap={...v,savedAt:`${ymd(now)} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`};
+  return {key:LS.get('key',''),month:M.key,done,pendingOrders,pendingLines,summary,snapshot:JSON.stringify(snap)};
 }
-$('#b-save').onclick=async()=>{
-  const url=LS.get('url',SHEET_URL);if(!url){$('#settings').open=true;msg('請先在設定填 Google Sheet 連結。','warn');return}
+async function save(auto){
+  if(!st.live)return;
+  const url=LS.get('url',SHEET_URL);if(!url){if(!auto){$('#settings').open=true;msg('請先在設定填 Google Sheet 連結。','warn')}return}
   const b=$('#b-save');b.disabled=true;b.textContent='儲存中…';
   try{
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload())});
     const j=await r.json();if(!j.ok)throw new Error(j.error||'儲存失敗');
-    msg(`已存到 Google Sheet：${st.M.key} 的對帳紀錄，以及待下次對帳的資料。`,'ok');
-    await loadCloud();
-  }catch(e){msg('儲存失敗：'+esc(e.message),'err')}
-  b.disabled=false;b.textContent='儲存到 Google Sheet';
-};
+    $('#cloud').textContent=`已存到 Google Sheet（${st.M.key}）。其他電腦打開會看到這次的結果，待下次對帳 ${st.vm.po.length} 筆訂單、${st.vm.ps.length} 張銷貨單。`;
+  }catch(e){msg('存到 Google Sheet 失敗：'+esc(e.message)+'（可以按「重新儲存」再試）','err')}
+  b.disabled=false;b.textContent='重新儲存';
+}
+$('#b-save').onclick=()=>save(false);
+
+// Excel with the same colours as the screen
+const FILL={unm:'F8CBAD',loss:'FCE4E4',chk:'FFF2CC',head:'1F3864'};
+function styledSheet(header,rows,rowClass,moneyCols,widths){
+  const ws=XLSX.utils.aoa_to_sheet([header,...rows]);
+  const range=XLSX.utils.decode_range(ws['!ref']);
+  for(let R=0;R<=range.e.r;R++)for(let C=0;C<=range.e.c;C++){
+    const a=XLSX.utils.encode_cell({r:R,c:C});if(!ws[a])ws[a]={t:'s',v:''};
+    const s={font:{name:'Arial',sz:11},alignment:{vertical:'top',wrapText:true},border:{bottom:{style:'thin',color:{rgb:'D9D9D9'}}}};
+    if(R===0){s.font={name:'Arial',sz:11,bold:true,color:{rgb:'FFFFFF'}};s.fill={patternType:'solid',fgColor:{rgb:FILL.head}}}
+    else{const cls=rowClass?rowClass(R-1):'';if(cls&&FILL[cls])s.fill={patternType:'solid',fgColor:{rgb:FILL[cls]}};
+      if(moneyCols.includes(C)){ws[a].z='#,##0';if(typeof ws[a].v==='number'&&ws[a].v<0)s.font={name:'Arial',sz:11,bold:true,color:{rgb:'C00000'}}}}
+    ws[a].s=s;
+  }
+  ws['!cols']=widths.map(w=>({wch:w}));ws['!freeze']={xSplit:0,ySplit:1};
+  return ws;
+}
 $('#b-xlsx').onclick=()=>{
-  const r=st.res,{po,ps,M}=pending(),T=r.T,wb=XLSX.utils.book_new();
-  const add=(n,rows)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.length?rows:[{'':'（無）'}]),n);
-  add('總結',[{項目:'對帳月份',數值:M.key},{項目:'訂單數',數值:T.orders},{項目:'實際入帳',數值:Math.round(T.payout)},{項目:'成本',數值:Math.round(T.cost)},{項目:'利潤',數值:Math.round(T.profit)},{項目:'固定成本',數值:st.fixed},{項目:'淨利',數值:Math.round(T.net)},{項目:'補對上次保留',數值:T.carriedMatched},{項目:'待下次訂單',數值:po.length},{項目:'待下次銷貨單',數值:ps.length}]);
-  add('每筆訂單',r.orders.map(o=>({訂單日:ymd(o.date),入帳日:ymd(o.paid),蝦皮訂單編號:o.id,銷貨單號:o.slip?o.slip.bline:'',商品:o.slip?o.slip.items:'',賣價:o.sale,退款:o.refund,蝦皮扣款:o.fee,退貨運費:o.returnShip,實際入帳:o.payout,成本:(o.slip||o.noSlipRefund)?o.cost:'',利潤:(o.slip||o.noSlipRefund)?o.profit:'',缺進價:(o.missing||[]).join('、'),備註:o.flags.map(x=>x[0]).join('；')})));
-  add('待下次訂單',po.map(o=>({訂單日:ymd(o.date),蝦皮訂單編號:o.id,實際入帳:o.payout,原因:o.why,保留自:o.since||M.key})));
-  add('待下次銷貨單',ps.map(s=>({開單日:ymd(s.date),銷貨單號:s.bline,金額:s.total,商品:s.items,狀態:s.why,保留自:s.since||M.key})));
-  add('缺進價',r.missing.map(m=>({商品編號:m.prodno,品名:m.name,規格:m.spec,售價:m.price,數量:m.qty})));
-  XLSX.writeFile(wb,`蝦皮利潤對帳_${M.key.replace('/','')}.xlsx`);
+  const v=st.vm,T=v.T,wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],['固定成本',v.fixed],['淨利',Math.round(T.net)],['補對上次保留',T.carriedMatched],['待下次訂單',v.po.length],['待下次銷貨單',v.ps.length],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
+  const O=v.orders;
+  XLSX.utils.book_append_sheet(wb,styledSheet(['訂單日','入帳日','蝦皮訂單編號','銷貨單號','商品','賣價','退款','蝦皮扣款','退貨運費','實際入帳','成本','利潤','缺進價','備註'],
+    O.map(o=>[o.date,o.paid,o.id,o.bline,o.items,o.sale,o.refund,o.fee,o.rs,o.payout,o.ok?o.cost:'',o.ok?o.profit:'',o.missing,o.flags.map(x=>x[0]).join('；')]),
+    i=>{const o=O[i];return !o.ok?'unm':o.profit<0?'loss':isCheck(o)?'chk':''},[5,6,7,8,9,10,11],[11,11,17,11,40,9,8,9,8,10,9,9,24,28]),'每筆訂單');
+  XLSX.utils.book_append_sheet(wb,styledSheet(['訂單日','蝦皮訂單編號','實際入帳','原因','保留自','可能是這張'],v.po.map(o=>[o.date,o.id,o.payout,o.why,o.since||v.month,o.cand.join('\n')]),()=> 'unm',[2],[11,17,10,36,10,60]),'待下次訂單');
+  XLSX.utils.book_append_sheet(wb,styledSheet(['開單日','銷貨單號','金額','商品','狀態','保留自'],v.ps.map(s=>[s.date,s.bline,s.total,s.items,s.why,s.since||v.month]),i=>v.ps[i].lv==='warn'?'chk':'',[2],[11,12,10,50,30,10]),'待下次銷貨單');
+  XLSX.utils.book_append_sheet(wb,styledSheet(['商品編號','品名','規格','售價','數量'],v.missing.map(m=>[m.prodno,m.name,m.spec,m.price,m.qty]),null,[3],[18,30,22,9,8]),'缺進價');
+  XLSX.writeFile(wb,`蝦皮利潤對帳_${v.month.replace('/','')}.xlsx`);
 };
 loadCloud();
 </script>
