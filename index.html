@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>蝦皮利潤對帳</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+/* 對帳工作台：上方三步驟，下方結果。鋼藍色重點，冷灰底。 */
+:root{
+  --bg:#f3f5f7; --panel:#fff; --ink:#18222c; --muted:#5b6875; --line:#dde3e9; --soft:#eaf0f5;
+  --accent:#1f5f8b; --accent-ink:#fff;
+  --good:#1e7a46; --good-bg:#e3f3e9; --warn:#9a6400; --warn-bg:#fdf1d8; --bad:#b3261e; --bad-bg:#fbe4e2;
+  --f-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#11171d; --panel:#18212a; --ink:#e6edf3; --muted:#9aa8b5; --line:#2b3742; --soft:#1f2b36;
+  --accent:#5aa6d6; --accent-ink:#0b1620;
+  --good:#6fcf97; --good-bg:#16301f; --warn:#f2c46b; --warn-bg:#352a12; --bad:#ff8a80; --bad-bg:#3a1a18; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding-block:20px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:16px}
+h1{font-size:24px;margin:0}
+.sub{color:var(--muted);margin:2px 0 0;font-size:14px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+.field{display:grid;gap:3px;font-size:13px;color:var(--muted)}
+.field input{font:inherit;font-size:15px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 9px}
+.field input.n{font-family:var(--f-num);width:130px}
+button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:8px 14px}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+details.settings{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+details.settings summary{cursor:pointer;font-weight:700}
+details.settings .row{margin-top:10px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{background:var(--panel);border:1.5px dashed var(--line);border-radius:10px;padding:14px;display:grid;gap:6px;position:relative}
+.card.ok{border-style:solid;border-color:var(--good)}
+.card.over{border-color:var(--accent)}
+.card input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
+.card .t{font-weight:700;font-size:16px}
+.card .range{font-size:14px}
+.card .range b{font-family:var(--f-num);font-weight:600}
+.card .h{font-size:13px;color:var(--muted)}
+.card .st{font-size:13px;font-weight:500;white-space:pre-line}
+.card.ok .st{color:var(--good)}
+.st.warn{color:var(--warn)!important}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;background:var(--soft);color:var(--muted);margin-left:6px;vertical-align:2px}
+.tag.req{background:var(--accent);color:var(--accent-ink)}
+.banner{border-radius:8px;padding:9px 13px;font-size:14px;background:var(--soft);color:var(--ink)}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.banner.err{background:var(--bad-bg);color:var(--bad)}
+.banner.ok{background:var(--good-bg);color:var(--good)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:2px}
+.kpi .l{font-size:13px;color:var(--muted)}
+.kpi .v{font-family:var(--f-num);font-size:22px;font-weight:600}
+.kpi.hl{border-color:var(--accent);border-width:2px}
+.kpi .s{font-size:12px;color:var(--muted)}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.tab{border:none;background:none;border-bottom:3px solid transparent;border-radius:0;padding:8px 12px;color:var(--muted);font-weight:500}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tab .c{font-family:var(--f-num);font-size:12px;margin-left:4px}
+.filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip{border-radius:99px;padding:4px 12px;font-size:13px}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.search{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:99px;padding:5px 12px;width:220px;max-width:100%}
+.tbl{overflow:auto;max-height:70vh;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{position:sticky;top:0;background:var(--soft);text-align:left;font-size:13px;padding:8px 10px;white-space:nowrap;z-index:1}
+td{padding:7px 10px;border-top:1px solid var(--line);vertical-align:top}
+.r{text-align:right;font-family:var(--f-num);font-variant-numeric:tabular-nums;white-space:nowrap}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums;white-space:nowrap}
+td.items{min-width:220px;max-width:380px}
+tr.unm td{background:var(--bad-bg)}
+.neg{color:var(--bad);font-weight:600}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;margin:1px 3px 1px 0;white-space:nowrap}
+.p-bad{background:var(--bad-bg);color:var(--bad)} .p-warn{background:var(--warn-bg);color:var(--warn)} .p-info{background:var(--soft);color:var(--muted)} .p-good{background:var(--good-bg);color:var(--good)}
+.miss{color:var(--warn);font-size:13px}
+td input.cost{width:96px;font:inherit;font-family:var(--f-num);font-size:14px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}
+.help{font-size:13px;color:var(--muted);margin:0}
+h2{font-size:16px;margin:6px 0 0}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+@media (max-width:600px){h1{font-size:20px}.kpi .v{font-size:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>蝦皮利潤對帳</h1>
+    <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
+  </header>
+
+  <details class="settings" id="settings">
+    <summary>設定（第一次使用請填）</summary>
+    <div class="row">
+      <label class="field" style="flex:1 1 360px">Google Sheet 連結（Apps Script 網址）<input id="i-url" type="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label class="field">通關碼（選填）<input id="i-key" type="password" style="width:120px"></label>
+      <label class="field">訂單報表密碼<input id="i-pw" type="password" style="width:120px"></label>
+      <label class="field">每月固定成本<input id="i-fixed" class="n" type="number" step="500" value="48000"></label>
+    </div>
+    <p class="help" style="margin-top:8px">這些設定只記在這台電腦的瀏覽器，不會放上網。</p>
+  </details>
+
+  <div class="row">
+    <label class="field">對帳月份（蝦皮撥款的月份）<input id="i-month" type="month"></label>
+    <span id="cloud" class="help"></span>
+  </div>
+
+  <section class="cards">
+    <label class="card" id="c-inc"><input type="file" id="f-inc" accept=".xlsx,.xls">
+      <span class="t">① 蝦皮進帳報表<span class="tag req">必要</span></span>
+      <span class="range">抓取日期（錢包入帳日）：<b id="r-inc"></b></span>
+      <span class="h">賣家中心 → 我的進帳 → 匯出</span>
+      <span class="st" id="s-inc">尚未選擇</span></label>
+    <label class="card" id="c-ord"><input type="file" id="f-ord" accept=".xlsx,.xls" multiple>
+      <span class="t">② 蝦皮訂單報表<span class="tag req">必要</span></span>
+      <span class="range">抓取日期（訂單成立日）：<b id="r-ord"></b></span>
+      <span class="h">賣家中心 → 我的銷售 →「全部」→ 匯出。一次最多一個月，可以一次選兩個檔。</span>
+      <span class="st" id="s-ord">尚未選擇</span></label>
+    <label class="card" id="c-cost"><input type="file" id="f-cost" accept=".xlsx,.xls,.csv" multiple>
+      <span class="t">③ 系統成本表<span class="tag req">必要</span></span>
+      <span class="range">抓取日期（開單日）：<b id="r-cost"></b></span>
+      <span class="h">系統匯出的銷貨明細（客戶蝦皮）。可以一次選多個檔。</span>
+      <span class="st" id="s-cost">尚未選擇</span></label>
+  </section>
+  <p class="help">為什麼要抓比較長：訂單要等客人按完成才撥款，開單也可能晚幾天，所以訂單和成本表要比進帳多抓前面一段。</p>
+
+  <div id="msg"></div>
+
+  <section id="result" hidden>
+    <div class="kpis" id="kpis"></div>
+    <div class="actions" style="margin-top:12px">
+      <button class="primary" id="b-save">儲存到 Google Sheet</button>
+      <button id="b-xlsx">下載 Excel</button>
+    </div>
+    <nav class="tabs" id="tabs" style="margin-top:14px"></nav>
+    <div id="panel" style="display:grid;gap:10px;margin-top:10px"></div>
+  </section>
+</div>
+<script>
+/* ===== CORE (pure logic, also tested in node) ===== */
+const TAX=1.05;
+function toDate(v){
+  if(v==null||v==='')return null;
+  if(v instanceof Date)return new Date(v.getFullYear(),v.getMonth(),v.getDate());
+  if(typeof v==='number'){const d=new Date(Math.round((v-25569)*864e5));return new Date(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate());}
+  const p=String(v).trim().split(/[\/\-. ]/).filter(Boolean).map(Number);
+  if(p.length<3||p.some(isNaN))return null;
+  let y=p[0]; if(String(p[0]).length<=2)y+=2000; else if(y<1911)y+=1911;
+  return new Date(y,p[1]-1,p[2]);
+}
+const DAY=864e5;
+const dd=(a,b)=>Math.round((a-b)/DAY);
+const fmtD=d=>d?`${d.getMonth()+1}/${d.getDate()}`:'';
+const N=v=>{const x=Number(v);return isFinite(x)?x:0};
+function bigrams(s){s=String(s||'').toLowerCase().replace(/\s+/g,'');const o=new Set();for(let i=0;i<s.length-1;i++)o.add(s.slice(i,i+2));return o}
+function sim(a,b){const A=bigrams(a),B=bigrams(b);if(!A.size||!B.size)return 0;let n=0;A.forEach(x=>{if(B.has(x))n++});return n/Math.min(A.size,B.size)}
+
+function parseCostRows(rows){
+  const need=['BLINE','SUM','DATIME','SOURP','ACCOUNT','PRICE'];
+  const hi=rows.findIndex(r=>r&&need.every(k=>r.includes(k)));
+  if(hi<0)throw new Error('成本表找不到需要的欄位：'+need.join('、'));
+  const h=rows[hi],ix=k=>h.indexOf(k);
+  const out=[];
+  for(const r of rows.slice(hi+1)){
+    if(!r||r[ix('BLINE')]==null||r[ix('BLINE')]==='')continue;
+    out.push({prodno:String(r[ix('PRODNO')]??'').trim(),name:String(r[ix('CHINESE')]??r[ix('PRODNO')]??'').replace(/\s+/g,' ').trim(),
+      spec:String(r[ix('SPEC')]??'').trim(),qty:N(r[ix('ACCOUNT')]),price:N(r[ix('PRICE')]),sum:N(r[ix('SUM')]),
+      date:toDate(r[ix('DATIME')]),bline:String(r[ix('BLINE')]),sourp:N(r[ix('SOURP')])});
+  }
+  return out;
+}
+function parseIncomeRows(rows){
+  const hi=rows.findIndex(r=>r&&r.includes('訂單編號')&&r.includes('錢包入帳金額'));
+  if(hi<0)throw new Error('這不是蝦皮進帳報表（找不到「訂單編號」「錢包入帳金額」欄位）');
+  const h=rows[hi],g=(r,k)=>r[h.indexOf(k)];
+  let start=null,end=null;
+  const pi=rows.findIndex(r=>r&&r.includes('從')&&r.includes('至'));
+  if(pi>=0&&rows[pi+1]){start=toDate(rows[pi+1][rows[pi].indexOf('從')]);end=toDate(rows[pi+1][rows[pi].indexOf('至')]);}
+  const out=[];
+  for(const r of rows.slice(hi+1)){
+    if(!r||!g(r,'訂單編號'))continue;
+    out.push({id:String(g(r,'訂單編號')),date:toDate(g(r,'訂單成立日期')),paid:toDate(g(r,'錢包入帳日期')),orig:N(g(r,'商品原價')),promo:N(g(r,'賣場商品促銷折扣')),
+      refund:N(g(r,'退款金額')),returnShip:N(g(r,'退貨運費')),payout:N(g(r,'錢包入帳金額'))});
+  }
+  return {orders:out,start,end};
+}
+function parseOrderRows(rows){
+  const hi=rows.findIndex(r=>r&&r.includes('訂單編號')&&r.includes('商品名稱'));
+  if(hi<0)throw new Error('這不是蝦皮訂單報表（找不到「訂單編號」「商品名稱」欄位）');
+  const h=rows[hi],g=(r,k)=>{const i=h.indexOf(k);return i<0?null:r[i]};
+  const map={};
+  for(const r of rows.slice(hi+1)){
+    const id=g(r,'訂單編號');if(!id)continue;
+    if(String(g(r,'訂單狀態')||'')==='不成立')continue;
+    (map[String(id)]=map[String(id)]||[]).push({name:[g(r,'商品名稱'),g(r,'商品選項名稱')].filter(Boolean).join(' '),
+      sku:String(g(r,'商品選項貨號')||g(r,'主商品貨號')||'').trim(),qty:N(g(r,'數量'))||1,price:N(g(r,'商品活動價格'))||N(g(r,'商品原價'))});
+  }
+  return map;
+}
+const tokens=l=>[l.prodno,...String(l.spec||'').split(/[\s,，/]+/)].map(t=>String(t||'').replace(/\s+/g,'').toLowerCase()).filter(t=>t.length>=4&&/\d/.test(t));
+function itemLine(it,l){
+  const text=String(it.name||'').toLowerCase().replace(/\s+/g,'');
+  let v=0;
+  if(it.qty===l.qty)v+=1;
+  if(it.price&&Math.abs(it.price-l.price)<0.5)v+=1.5;
+  else if(it.price&&Math.abs(it.price*it.qty-l.sum)<1)v+=2.5; // sold as a box/set on Shopee, by the piece in the system
+  if(tokens(l).some(t=>text.includes(t)))v+=2;
+  if(it.sku&&l.prodno&&it.sku.toLowerCase()===l.prodno.toLowerCase())v+=2;
+  v+=sim(String(l.name).replace(/[a-z0-9 ]+$/i,''),it.name);
+  return v;
+}
+// how well a system invoice matches the Shopee order's items (0 = nothing in common, ~4+ = same items)
+function scoreSlip(slip,items){
+  let s=0;
+  for(const it of items){let b=0;for(const l of slip.lines)b=Math.max(b,itemLine(it,l));s+=b}
+  return s/items.length-0.5*Math.abs(items.length-slip.lines.length);
+}
+// strict content check used when amounts differ: same number of lines, every item finds its own line with same qty and a name/model match
+function sameContent(slip,items){
+  if(items.length!==slip.lines.length)return false;
+  const used=new Set();
+  for(const it of items){
+    let best=-1,bi=-1;
+    slip.lines.forEach((l,i)=>{if(used.has(i)||it.qty!==l.qty)return;const text=String(it.name).toLowerCase().replace(/\s+/g,'');
+      const ok=tokens(l).some(t=>text.includes(t))||sim(String(l.name).replace(/[a-z0-9 ]+$/i,''),it.name)>=0.34;
+      if(ok){const v=itemLine(it,l);if(v>best){best=v;bi=i}}});
+    if(bi<0)return false;used.add(bi);
+  }
+  return true;
+}
+function analyze({cost,income,orderItems,overrides={},fixed=48000,target=0.07}){
+  const lines=cost.map(l=>{
+    const ov=overrides[l.prodno];
+    const sourp=ov!=null&&ov!==''?N(ov):l.sourp;
+    const bad=(ov==null||ov==='')&&!(l.sourp>0);
+    const odd=!bad&&(ov==null||ov==='')&&l.sourp>l.price; // set piece or unit mismatch: keep real cost, list for review
+    return {...l,sourp,bad,odd,ov:ov!=null&&ov!==''};
+  });
+  let cs=0,ss=0;lines.forEach(l=>{if(!l.bad&&!l.odd){cs+=l.sourp*l.qty;ss+=l.sum}});
+  const ratio=ss?cs/ss:0.72;
+  const slips=new Map();
+  for(const l of lines){
+    l.cost=l.bad?l.sum*ratio:l.sourp*l.qty;
+    let s=slips.get(l.bline);
+    if(!s){s={bline:l.bline,date:l.date,total:0,cost:0,lines:[],used:false,carried:false,since:l.since||''};slips.set(l.bline,s)}
+    if(l.carried)s.carried=true;
+    s.total+=l.sum;s.cost+=l.cost;s.lines.push(l);
+  }
+  slips.forEach(s=>{s.total=Math.round(s.total);s.sig=s.lines.map(l=>l.prodno+'#'+l.qty).sort().join('|');
+    s.items=s.lines.map(l=>`${l.name}×${l.qty}`).join('、');s.missing=s.lines.filter(l=>l.bad).map(l=>`${l.name}（${l.prodno}）`);});
+  const slipArr=[...slips.values()];
+  const minSlip=slipArr.filter(s=>!s.carried).reduce((m,s)=>s.date&&(!m||s.date<m)?s.date:m,null);
+  const byTotal=new Map();slipArr.forEach(s=>{(byTotal.get(s.total)||byTotal.set(s.total,[]).get(s.total)).push(s)});
+  const ords=[...income.orders].sort((a,b)=>(a.date-b.date)||a.id.localeCompare(b.id));
+  // global matching: closest dates first, so an early order cannot take a later order's invoice
+  const pairs=[];
+  for(const o of ords){
+    const items=orderItems&&orderItems[o.id];
+    const keys=[...new Set([Math.round(o.orig),Math.round(o.orig+o.promo),Math.round(o.orig+o.promo+o.refund)])].filter(k=>k>0);
+    for(const s of keys.flatMap(k=>byTotal.get(k)||[])){
+      if(!s.date||!o.date)continue;const lag=dd(s.date,o.date);
+      if(lag<-1||lag>10)continue;
+      pairs.push({o,s,lag,sc:items?Math.round(scoreSlip(s,items)):0});
+    }
+  }
+  pairs.sort((a,b)=>(b.sc-a.sc)||(Math.abs(a.lag)-Math.abs(b.lag))||(b.lag-a.lag)||(a.o.date-b.o.date)||(a.s.date-b.s.date));
+  for(const p of pairs){if(p.o.slip||p.s.used)continue;p.o.slip=p.s;p.o.lag=p.lag;p.o.score=p.sc;p.s.used=true}
+  // second pass: amount differs (quantity discount etc.) but the items are the same
+  if(orderItems){
+    const free=slipArr.filter(x=>!x.used&&x.date);
+    const p2=[];
+    for(const o of ords){
+      if(o.slip||!o.date)continue;const items=orderItems[o.id];if(!items)continue;
+      for(const s of free){const lag=dd(s.date,o.date);if(lag<-1||lag>4)continue;
+        if(Math.abs(s.total-o.orig)>Math.max(100,o.orig*0.2))continue;
+        if(sameContent(s,items))p2.push({o,s,lag,d:Math.abs(s.total-o.orig)});}
+    }
+    p2.sort((a,b)=>(Math.abs(a.lag)-Math.abs(b.lag))||(a.d-b.d));
+    for(const p of p2){if(p.o.slip||p.s.used)continue;p.o.slip=p.s;p.o.lag=p.lag;p.o.score=9;p.o.byContent=true;p.s.used=true}
+  }
+  // post-process
+  const grp={};ords.forEach(o=>{const k=+o.date+'|'+Math.round(o.orig+o.promo);(grp[k]=grp[k]||[]).push(o)});
+  let totRev=0;ords.filter(o=>!o.carried).forEach(o=>totRev+=o.orig+o.promo+o.refund);
+  const fixedRate=totRev?fixed/(totRev/TAX):0;
+  const prod=new Map();
+  for(const o of ords){
+    o.sale=o.orig+o.promo;o.rev=o.sale+o.refund;
+    o.fee=o.payout-o.sale-o.refund-o.returnShip;
+    o.keep=o.orig>0?Math.max(0,(o.orig+o.refund)/o.orig):0;
+    o.flags=[];
+    
+    if(o.slip&&o.refund!==0&&o.rev>0&&Math.abs(o.slip.total-o.rev)<1){o.keep=1;o.slipNet=true} // invoice already shows only the kept items
+    if(o.slip){
+      o.cost=Math.round(o.slip.cost*o.keep);
+      if(o.refund!==0)o.flags.push(o.rev<=0?['全額退貨，成本不計','warn']:o.slipNet?['部分退款（銷貨單已扣退貨）','info']:['部分退款，成本照比例扣','warn']);
+      o.profit=Math.round(o.payout/TAX-o.cost);
+      o.missing=o.keep>0?o.slip.missing:[];
+      if(o.byContent)o.flags.push([`金額不同（系統 ${o.slip.total}），依品項配對`,'info']);
+      if(o.carried)o.flags.push(['上次保留，這次對到','info']);
+      if(!o.carried&&!o.slip.carried&&minSlip&&o.date<minSlip)o.flags.push(['訂單早於成本表，可能對錯','warn']);
+      else if(Math.abs(o.lag)>4)o.flags.push([`開單晚 ${o.lag} 天，請核對`,'warn']);
+      const g=grp[+o.date+'|'+Math.round(o.orig+o.promo)];
+      const sigs=new Set(g.filter(x=>x.slip).map(x=>x.slip.sig));
+      if(sigs.size>1&&!(orderItems&&orderItems[o.id]&&o.score>=3))o.flags.push([orderItems&&orderItems[o.id]?'品項比不出來，請核對':'同天同金額、品項不同，請核對','warn']);
+      if(o.missing.length)o.flags.push(['有商品缺進價','info']);
+      for(const l of o.slip.lines){
+        const share=o.slip.total?l.sum/o.slip.total:0;
+        let p=prod.get(l.prodno);
+        if(!p){p={prodno:l.prodno,name:l.name,spec:l.spec,qty:0,sales:0,cost:0,fee:0,bad:false};prod.set(l.prodno,p)}
+        p.qty+=l.qty*o.keep;p.sales+=l.sum*o.keep;p.cost+=l.cost*o.keep;p.fee+=-(o.payout-o.rev)*share/TAX;p.bad=p.bad||l.bad;
+      }
+    }else if(o.rev<=0){o.flags.push(['全額退貨，成本不計','warn']);o.cost=0;o.profit=Math.round(o.payout/TAX);o.noSlipRefund=true;o.missing=[]}
+    else{o.flags.unshift(['對不起來','bad'])}
+  }
+  const products=[...prod.values()].filter(p=>p.qty>0.001).map(p=>{
+    const net=p.sales/TAX;const fr=net?p.fee/net:0;const profit=net-p.cost-p.fee-net*fixedRate;
+    const ucost=p.cost/p.qty;const price=p.sales/p.qty;
+    const npr=net?profit/net:0;const den=1-fr-fixedRate-target;
+    return {...p,price,ucost,profit,npr,feeRate:fr,suggest:den>0?ucost*TAX/den:null,judge:npr<0?'賠錢':npr<target?'偏低':'OK'};
+  }).sort((a,b)=>a.profit-b.profit);
+  const missMap=new Map();
+  lines.filter(l=>l.bad).forEach(l=>{let m=missMap.get(l.prodno);if(!m){m={prodno:l.prodno,name:l.name,spec:l.spec,price:l.price,sourp:l.sourp,qty:0,sales:0};missMap.set(l.prodno,m)}m.qty+=l.qty;m.sales+=l.sum;m.price=Math.max(m.price,l.price)});
+  const missing=[...missMap.values()].sort((a,b)=>b.sales-a.sales);
+  const oddMap=new Map();
+  lines.filter(l=>l.odd).forEach(l=>{let m=oddMap.get(l.prodno);if(!m){m={prodno:l.prodno,name:l.name,spec:l.spec,price:l.price,sourp:l.sourp,qty:0,sales:0};oddMap.set(l.prodno,m)}m.qty+=l.qty;m.sales+=l.sum});
+  const odd=[...oddMap.values()].sort((a,b)=>b.sourp*b.qty-a.sourp*a.qty);
+  const unused=slipArr.filter(s=>!s.used);
+  const unmatched=ords.filter(o=>!o.slip&&!o.noSlipRefund).map(o=>{
+    const cand=unused.filter(s=>s.date&&o.date&&dd(s.date,o.date)>=-1&&dd(s.date,o.date)<=6&&Math.abs(s.total-o.orig)<=Math.max(60,o.orig*0.1))
+      .sort((a,b)=>Math.abs(a.total-o.orig)-Math.abs(b.total-o.orig)).slice(0,2);
+    let why=o.carried?'上次保留，這次還是沒對到':minSlip&&o.date<minSlip?'成本表沒有這天的資料（成本表日期範圍不夠早）':o.refund!==0?'有退款，金額變動':'找不到同金額的銷貨單（開單金額不同、合併開單或沒開單）';
+    return {...o,why,cand};
+  });
+  const S=income.start,E=income.end;
+  const unpaid=unused.sort((a,b)=>a.date-b.date).map(s=>{
+    let why='該入帳了卻沒對到，請核對（金額不同、退款或合併開單）',lv='warn';
+    if(s.carried){why='上次保留，還沒入帳';lv='keep'}
+    else if(S&&s.date<new Date(+S-3*DAY)){why='開單日在這期之前，應該上一期已入帳';lv='drop'}
+    else if(E&&s.date>new Date(+E-12*DAY)){why='還沒入帳（下一期撥款）';lv='keep'}
+    return {...s,why,lv};
+  });
+  const m=ords.filter(o=>o.slip||o.noSlipRefund);
+  const T={orders:ords.length,matched:m.length,sale:0,refund:0,fee:0,returnShip:0,payout:0,cost:0,profit:0,payoutMatched:0};
+  ords.filter(o=>!o.carried).forEach(o=>{T.sale+=o.sale;T.refund+=o.refund;T.fee+=o.fee;T.returnShip+=o.returnShip;T.payout+=o.payout});
+  T.orders=ords.filter(o=>!o.carried).length;T.carried=ords.filter(o=>o.carried).length;T.carriedMatched=m.filter(o=>o.carried).length;
+  m.forEach(o=>{T.cost+=o.cost;T.profit+=o.profit});
+  T.net=T.profit-fixed;T.revNet=totRev/TAX;T.feeRate=T.sale?-(T.fee+T.returnShip)/T.sale:0;T.fixedRate=fixedRate;T.ratio=ratio;
+  return {orders:ords,products,missing,odd,unmatched,unpaid,T,period:[S,E]};
+}
+/* ===== DECRYPT (password-protected Shopee exports, MS-OFFCRYPTO agile) ===== */
+function isCFB(u8){return u8.length>8&&u8[0]===0xD0&&u8[1]===0xCF&&u8[2]===0x11&&u8[3]===0xE0}
+function readCFB(u8){
+  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const u32=o=>dv.getUint32(o,true);
+  const ss=1<<dv.getUint16(30,true),mss=1<<dv.getUint16(32,true);
+  const nFat=u32(44),dir0=u32(48),cutoff=u32(56),mini0=u32(60),nMini=u32(64);let difat0=u32(68);const nDifat=u32(72);
+  const sec=i=>(i+1)*ss;
+  const difat=[];for(let i=0;i<109;i++){const v=u32(76+i*4);if(v<0xFFFFFFFA)difat.push(v)}
+  for(let k=0;k<nDifat&&difat0<0xFFFFFFFA;k++){const b=sec(difat0);for(let i=0;i<ss/4-1;i++){const v=u32(b+i*4);if(v<0xFFFFFFFA)difat.push(v)}difat0=u32(b+ss-4)}
+  const fat=[];for(const s of difat.slice(0,nFat)){const b=sec(s);for(let i=0;i<ss/4;i++)fat.push(u32(b+i*4))}
+  const chain=(start,tab)=>{const out=[];let s=start,g=0;while(s<0xFFFFFFFA&&g++<1e7){out.push(s);s=tab[s]}return out};
+  const readBig=(start,size)=>{const out=new Uint8Array(size);let p=0;for(const s of chain(start,fat)){const n=Math.min(ss,size-p);if(n<=0)break;out.set(u8.subarray(sec(s),sec(s)+n),p);p+=n}return out};
+  const dirBytes=readBig(dir0,chain(dir0,fat).length*ss);
+  const entries=[];
+  for(let o=0;o+128<=dirBytes.length;o+=128){
+    const nl=dirBytes[o+64]|(dirBytes[o+65]<<8);let name='';for(let i=0;i<nl-2;i+=2)name+=String.fromCharCode(dirBytes[o+i]|(dirBytes[o+i+1]<<8));
+    const d=new DataView(dirBytes.buffer,dirBytes.byteOffset+o,128);
+    entries.push({name,type:dirBytes[o+66],start:d.getUint32(116,true),size:d.getUint32(120,true)});
+  }
+  const root=entries[0];const ministream=readBig(root.start,root.size);
+  const minifat=[];if(nMini){const mb=readBig(mini0,chain(mini0,fat).length*ss);const md=new DataView(mb.buffer);for(let i=0;i<mb.length/4;i++)minifat.push(md.getUint32(i*4,true))}
+  const get=name=>{const e=entries.find(x=>x.name===name&&x.type===2);if(!e)return null;
+    if(e.size>=cutoff)return readBig(e.start,e.size);
+    const out=new Uint8Array(e.size);let p=0;for(const s of chain(e.start,minifat)){const n=Math.min(mss,e.size-p);out.set(ministream.subarray(s*mss,s*mss+n),p);p+=n}return out};
+  return {get};
+}
+/* SHA-512 (sync, used for the 100,000-round key derivation) */
+const SHA512K=(()=>{const h=['428a2f98d728ae22','7137449123ef65cd','b5c0fbcfec4d3b2f','e9b5dba58189dbbc','3956c25bf348b538','59f111f1b605d019','923f82a4af194f9b','ab1c5ed5da6d8118','d807aa98a3030242','12835b0145706fbe','243185be4ee4b28c','550c7dc3d5ffb4e2','72be5d74f27b896f','80deb1fe3b1696b1','9bdc06a725c71235','c19bf174cf692694','e49b69c19ef14ad2','efbe4786384f25e3','0fc19dc68b8cd5b5','240ca1cc77ac9c65','2de92c6f592b0275','4a7484aa6ea6e483','5cb0a9dcbd41fbd4','76f988da831153b5','983e5152ee66dfab','a831c66d2db43210','b00327c898fb213f','bf597fc7beef0ee4','c6e00bf33da88fc2','d5a79147930aa725','06ca6351e003826f','142929670a0e6e70','27b70a8546d22ffc','2e1b21385c26c926','4d2c6dfc5ac42aed','53380d139d95b3df','650a73548baf63de','766a0abb3c77b2a8','81c2c92e47edaee6','92722c851482353b','a2bfe8a14cf10364','a81a664bbc423001','c24b8b70d0f89791','c76c51a30654be30','d192e819d6ef5218','d69906245565a910','f40e35855771202a','106aa07032bbd1b8','19a4c116b8d2d0c8','1e376c085141ab53','2748774cdf8eeb99','34b0bcb5e19b48a8','391c0cb3c5c95a63','4ed8aa4ae3418acb','5b9cca4f7763e373','682e6ff3d6b2b8a3','748f82ee5defb2fc','78a5636f43172f60','84c87814a1f0ab72','8cc702081a6439ec','90befffa23631e28','a4506cebde82bde9','bef9a3f7b2c67915','c67178f2e372532b','ca273eceea26619c','d186b8c721c0c207','eada7dd6cde0eb1e','f57d4f7fee6ed178','06f067aa72176fba','0a637dc5a2c898a6','113f9804bef90dae','1b710b35131c471b','28db77f523047d84','32caab7b40c72493','3c9ebe0a15c9bebc','431d67c49c100d4c','4cc5d4becb3e42b6','597f299cfc657e2a','5fcb6fab3ad6faec','6c44198c4a475817'];
+  const a=new Int32Array(160);h.forEach((x,i)=>{a[2*i]=parseInt(x.slice(0,8),16)|0;a[2*i+1]=parseInt(x.slice(8),16)|0});return a})();
+function sha512(msg){
+  const H=new Int32Array([0x6a09e667,0xf3bcc908|0,0xbb67ae85|0,0x84caa73b|0,0x3c6ef372,0xfe94f82b|0,0xa54ff53a|0,0x5f1d36f1,0x510e527f,0xade682d1|0,0x9b05688c|0,0x2b3e6c1f,0x1f83d9ab,0xfb41bd6b|0,0x5be0cd19,0x137e2179]);
+  const l=msg.length,nb=Math.ceil((l+17)/128);const b=new Uint8Array(nb*128);b.set(msg);b[l]=0x80;
+  const bits=l*8;const dvb=new DataView(b.buffer);dvb.setUint32(nb*128-4,bits>>>0);dvb.setUint32(nb*128-8,Math.floor(bits/4294967296));
+  const W=new Int32Array(160);const K=SHA512K;
+  for(let blk=0;blk<nb;blk++){
+    for(let i=0;i<32;i++)W[i]=dvb.getInt32(blk*128+i*4);
+    for(let i=16;i<80;i++){
+      const xh=W[2*(i-15)],xl=W[2*(i-15)+1];
+      const s0h=((xh>>>1)|(xl<<31))^((xh>>>8)|(xl<<24))^(xh>>>7);
+      const s0l=((xl>>>1)|(xh<<31))^((xl>>>8)|(xh<<24))^((xl>>>7)|(xh<<25));
+      const yh=W[2*(i-2)],yl=W[2*(i-2)+1];
+      const s1h=((yh>>>19)|(yl<<13))^((yl>>>29)|(yh<<3))^(yh>>>6);
+      const s1l=((yl>>>19)|(yh<<13))^((yh>>>29)|(yl<<3))^((yl>>>6)|(yh<<26));
+      let lo=(s0l>>>0)+(s1l>>>0)+(W[2*(i-7)+1]>>>0)+(W[2*(i-16)+1]>>>0);
+      W[2*i]=(s0h+s1h+W[2*(i-7)]+W[2*(i-16)]+Math.floor(lo/4294967296))|0;W[2*i+1]=lo|0;
+    }
+    let ah=H[0],al=H[1],bh=H[2],bl=H[3],ch=H[4],cl=H[5],dh=H[6],dl=H[7],eh=H[8],el=H[9],fh=H[10],fl=H[11],gh=H[12],gl=H[13],hh=H[14],hl=H[15];
+    for(let i=0;i<80;i++){
+      const S1h=((eh>>>14)|(el<<18))^((eh>>>18)|(el<<14))^((el>>>9)|(eh<<23));
+      const S1l=((el>>>14)|(eh<<18))^((el>>>18)|(eh<<14))^((eh>>>9)|(el<<23));
+      const chh=(eh&fh)^(~eh&gh),chl=(el&fl)^(~el&gl);
+      let lo=(hl>>>0)+(S1l>>>0)+(chl>>>0)+(K[2*i+1]>>>0)+(W[2*i+1]>>>0);
+      const t1h=(hh+S1h+chh+K[2*i]+W[2*i]+Math.floor(lo/4294967296))|0,t1l=lo|0;
+      const S0h=((ah>>>28)|(al<<4))^((al>>>2)|(ah<<30))^((al>>>7)|(ah<<25));
+      const S0l=((al>>>28)|(ah<<4))^((ah>>>2)|(al<<30))^((ah>>>7)|(al<<25));
+      const mjh=(ah&bh)^(ah&ch)^(bh&ch),mjl=(al&bl)^(al&cl)^(bl&cl);
+      lo=(S0l>>>0)+(mjl>>>0);const t2h=(S0h+mjh+Math.floor(lo/4294967296))|0,t2l=lo|0;
+      hh=gh;hl=gl;gh=fh;gl=fl;fh=eh;fl=el;
+      lo=(dl>>>0)+(t1l>>>0);eh=(dh+t1h+Math.floor(lo/4294967296))|0;el=lo|0;
+      dh=ch;dl=cl;ch=bh;cl=bl;bh=ah;bl=al;
+      lo=(t1l>>>0)+(t2l>>>0);ah=(t1h+t2h+Math.floor(lo/4294967296))|0;al=lo|0;
+    }
+    const add=(i,h,l)=>{const lo=(H[i+1]>>>0)+(l>>>0);H[i]=(H[i]+h+Math.floor(lo/4294967296))|0;H[i+1]=lo|0};
+    add(0,ah,al);add(2,bh,bl);add(4,ch,cl);add(6,dh,dl);add(8,eh,el);add(10,fh,fl);add(12,gh,gl);add(14,hh,hl);
+  }
+  const out=new Uint8Array(64);const dvo=new DataView(out.buffer);for(let i=0;i<16;i++)dvo.setInt32(i*4,H[i]);return out;
+}
+const cat=(...a)=>{const n=a.reduce((s,x)=>s+x.length,0),o=new Uint8Array(n);let p=0;for(const x of a){o.set(x,p);p+=x.length}return o};
+const le32=i=>new Uint8Array([i&255,(i>>>8)&255,(i>>>16)&255,(i>>>24)&255]);
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function aesCbcRaw(keyBytes,iv,data){ // AES-CBC decrypt without padding, via WebCrypto
+  const subtle=globalThis.crypto.subtle;
+  const k=await subtle.importKey('raw',keyBytes,{name:'AES-CBC'},false,['encrypt','decrypt']);
+  const last=data.subarray(data.length-16);
+  const pad=new Uint8Array(16).fill(16);
+  const extra=new Uint8Array(await subtle.encrypt({name:'AES-CBC',iv:last},k,pad)).subarray(0,16);
+  return new Uint8Array(await subtle.decrypt({name:'AES-CBC',iv},k,cat(data,extra)));
+}
+function sha1(msg){
+  const l=msg.length,nb=Math.ceil((l+9)/64),b=new Uint8Array(nb*64);b.set(msg);b[l]=0x80;
+  const dv=new DataView(b.buffer);dv.setUint32(nb*64-4,(l*8)>>>0);dv.setUint32(nb*64-8,Math.floor(l*8/4294967296));
+  let h0=0x67452301,h1=0xEFCDAB89|0,h2=0x98BADCFE|0,h3=0x10325476,h4=0xC3D2E1F0|0;const w=new Int32Array(80);
+  for(let k=0;k<nb;k++){
+    for(let i=0;i<16;i++)w[i]=dv.getInt32(k*64+i*4);
+    for(let i=16;i<80;i++){const x=w[i-3]^w[i-8]^w[i-14]^w[i-16];w[i]=(x<<1)|(x>>>31)}
+    let a=h0,b2=h1,c=h2,d=h3,e=h4;
+    for(let i=0;i<80;i++){
+      const f=i<20?((b2&c)|(~b2&d))+0x5A827999:i<40?(b2^c^d)+0x6ED9EBA1:i<60?((b2&c)|(b2&d)|(c&d))+(0x8F1BBCDC|0):(b2^c^d)+(0xCA62C1D6|0);
+      const t=(((a<<5)|(a>>>27))+f+e+w[i])|0;e=d;d=c;c=(b2<<30)|(b2>>>2);b2=a;a=t;
+    }
+    h0=(h0+a)|0;h1=(h1+b2)|0;h2=(h2+c)|0;h3=(h3+d)|0;h4=(h4+e)|0;
+  }
+  const o=new Uint8Array(20),dvo=new DataView(o.buffer);[h0,h1,h2,h3,h4].forEach((h,i)=>dvo.setInt32(i*4,h));return o;
+}
+async function aesEcbDecrypt(key,data){ // ECB via CBC: D(Ci) = cbcOut_i XOR C(i-1)
+  const out=await aesCbcRaw(key,new Uint8Array(16),data);
+  for(let i=16;i<out.length;i++)out[i]^=data[i-16];
+  return out;
+}
+async function decryptStandard(info,pkg,password){
+  const dv=new DataView(info.buffer,info.byteOffset,info.byteLength);
+  const hsize=dv.getUint32(8,true);const hdr=12;
+  const keyBits=dv.getUint32(hdr+16,true)||128;
+  let p=12+hsize;const saltSize=dv.getUint32(p,true);p+=4;
+  const salt=info.subarray(p,p+saltSize);p+=saltSize;
+  const encVer=info.subarray(p,p+16);p+=16;p+=4;const encVerHash=info.subarray(p,p+32);
+  const pw=new Uint8Array(password.length*2);for(let i=0;i<password.length;i++){const c=password.charCodeAt(i);pw[2*i]=c&255;pw[2*i+1]=c>>8}
+  let h=sha1(cat(salt,pw));for(let i=0;i<50000;i++)h=sha1(cat(le32(i),h));
+  h=sha1(cat(h,le32(0)));
+  const x=n=>{const b=new Uint8Array(64).fill(n);for(let i=0;i<20;i++)b[i]^=h[i];return sha1(b)};
+  const key=cat(x(0x36),x(0x5c)).subarray(0,keyBits/8);
+  const ver=await aesEcbDecrypt(key,encVer),vh=await aesEcbDecrypt(key,encVerHash);
+  const want=sha1(ver);for(let i=0;i<20;i++)if(want[i]!==vh[i])throw new Error('密碼不對，打不開訂單報表');
+  const size=new DataView(pkg.buffer,pkg.byteOffset,8).getUint32(0,true);
+  const body=pkg.subarray(8,8+Math.ceil(size/16)*16);
+  return (await aesEcbDecrypt(key,body.subarray(0,body.length-body.length%16))).subarray(0,size);
+}
+async function decryptOffice(u8,password){
+  const cfb=readCFB(u8);
+  const info=cfb.get('EncryptionInfo'),pkg=cfb.get('EncryptedPackage');
+  if(!info||!pkg)throw new Error('這個加密檔案的格式看不懂');
+  const vMaj=info[0]|(info[1]<<8),vMin=info[2]|(info[3]<<8);
+  if(vMin===2&&(vMaj===2||vMaj===3||vMaj===4)){const o=await decryptStandard(info,pkg,password);if(o[0]!==0x50||o[1]!==0x4B)throw new Error('密碼不對，打不開訂單報表');return o}
+  const xml=new TextDecoder().decode(info.subarray(8));
+  const attr=(tag,name)=>{const m=xml.match(new RegExp('<(?:\\w+:)?'+tag+'\\b[^>]*?\\s'+name+'="([^"]*)"'));return m?m[1]:null};
+  const kdSalt=b64(attr('keyData','saltValue')),bs=+attr('keyData','blockSize')||16;
+  const spin=+attr('encryptedKey','spinCount'),kBits=+attr('encryptedKey','keyBits');
+  const ekSalt=b64(attr('encryptedKey','saltValue')),ekv=b64(attr('encryptedKey','encryptedKeyValue'));
+  const pw=new Uint8Array(password.length*2);for(let i=0;i<password.length;i++){const c=password.charCodeAt(i);pw[2*i]=c&255;pw[2*i+1]=c>>8}
+  let h=sha512(cat(ekSalt,pw));
+  for(let i=0;i<spin;i++)h=sha512(cat(le32(i),h));
+  const kk=sha512(cat(h,new Uint8Array([0x14,0x6e,0x0b,0xe7,0xab,0xac,0xd0,0xd6]))).subarray(0,kBits/8);
+  let secret;
+  try{secret=(await aesCbcRaw(kk,ekSalt.subarray(0,16),ekv)).subarray(0,kBits/8)}catch(e){throw new Error('密碼不對，打不開訂單報表')}
+  const size=new DataView(pkg.buffer,pkg.byteOffset,8).getUint32(0,true);
+  const out=new Uint8Array(size);
+  for(let seg=0,p=8;p<pkg.length&&seg*4096<size;seg++,p+=4096){
+    const chunk=pkg.subarray(p,Math.min(p+4096,pkg.length));
+    const iv=sha512(cat(kdSalt,le32(seg))).subarray(0,bs);
+    const dec=await aesCbcRaw(secret,iv,chunk.subarray(0,chunk.length-chunk.length%16));
+    out.set(dec.subarray(0,Math.min(dec.length,size-seg*4096)),seg*4096);
+  }
+  if(out[0]!==0x50||out[1]!==0x4B)throw new Error('密碼不對，打不開訂單報表');
+  return out;
+}
+/* ===== END DECRYPT ===== */
+/* ===== UI ===== */
+const $=s=>document.querySelector(s);
+const fm=v=>v==null||v===''?'':Math.round(v).toLocaleString('zh-TW');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ymd=d=>d?`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`:'';
+const md=d=>d?`${d.getMonth()+1}/${d.getDate()}`:'';
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const st={inc:null,ord:null,ordInfo:[],cost:null,costInfo:[],cloud:null,res:null,tab:'orders',filter:'all',q:'',removed:new Set()};
+let overrides=LS.get('costOverrides',{});
+const SHEET_URL='https://script.google.com/macros/s/AKfycbxEQ4CodEnrbQJ4MhtGHNrR-wyzmT3q2KMFYu6Dy7X03M7PhcmQtIj3Us2j6WmuFY7tHQ/exec';
+
+// settings
+[['#i-url','url',SHEET_URL],['#i-key','key',''],['#i-pw','pw',''],['#i-fixed','fixed',48000]].forEach(([id,k,d])=>{
+  const el=$(id);el.value=LS.get(k,d);el.addEventListener('change',()=>{LS.set(k,el.value);if(k==='url'||k==='key')loadCloud();else run()});
+});
+if(!LS.get('pw',''))$('#settings').open=true;
+(function(){const t=new Date();const p=new Date(t.getFullYear(),t.getMonth()-1,1);$('#i-month').value=LS.get('month',`${p.getFullYear()}-${String(p.getMonth()+1).padStart(2,'0')}`)})();
+$('#i-month').addEventListener('change',()=>{LS.set('month',$('#i-month').value);showRanges();checkCover();run()});
+
+function monthInfo(){
+  const [y,m]=$('#i-month').value.split('-').map(Number);
+  return {key:$('#i-month').value.replace('-','/'),start:new Date(y,m-1,1),end:new Date(y,m,0),prevStart:new Date(y,m-2,1),prev15:new Date(y,m-2,15)};
+}
+function ranges(){const M=monthInfo();return {inc:[M.start,M.end],ord:[M.prev15,M.end],cost:[M.prevStart,M.end]}}
+function showRanges(){const R=ranges();for(const k of ['inc','ord','cost'])$('#r-'+k).textContent=`${ymd(R[k][0])} ～ ${ymd(R[k][1])}`}
+showRanges();
+
+function msg(t,cls){$('#msg').innerHTML=t?`<div class="banner ${cls||''}">${t}</div>`:''}
+
+// cloud
+async function loadCloud(){
+  const url=LS.get('url',SHEET_URL);st.cloud=null;
+  if(!url){$('#cloud').textContent='還沒設定 Google Sheet，沒對到的資料無法保留到下次。';run();return}
+  $('#cloud').textContent='正在讀取 Google Sheet…';
+  try{
+    const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key','')));
+    const j=await r.json();if(!j.ok)throw new Error(j.error||'讀取失敗');
+    st.cloud=j;
+    $('#cloud').textContent=`Google Sheet：上次保留訂單 ${j.pendingOrders.length} 筆、銷貨單 ${new Set(j.pendingLines.map(x=>x[0])).size} 張。`;
+  }catch(e){$('#cloud').textContent='讀不到 Google Sheet：'+e.message+'（請檢查設定裡的網址）'}
+  run();
+}
+
+// files
+function readBuf(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=e=>ok(new Uint8Array(e.target.result));r.onerror=no;r.readAsArrayBuffer(f)})}
+async function openBook(f,pw){
+  let u8=await readBuf(f);
+  if(isCFB(u8)){
+    let wb=null;try{wb=XLSX.read(u8,{type:'array'})}catch(e){}
+    if(wb&&wb.SheetNames.length)return wb;
+    if(!pw)throw new Error(`「${f.name}」有密碼，請先在設定填「訂單報表密碼」`);
+    u8=await decryptOffice(u8,pw);
+  }
+  return XLSX.read(u8,{type:'array'});
+}
+function rowsOf(wb,word){
+  for(const n of wb.SheetNames){const r=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null,raw:true});if(r.some(x=>x&&x.includes&&x.includes(word)))return r}
+  return null;
+}
+function span(dates){const v=dates.filter(Boolean).sort((a,b)=>a-b);return v.length?[v[0],v[v.length-1]]:null}
+function coverText(sp,want){
+  if(!sp)return {t:'',ok:true};
+  const ok=sp[0]<=want[0]&&sp[1]>=new Date(+want[1]-2*DAY);
+  return {t:`檔案日期 ${ymd(sp[0])} ～ ${ymd(sp[1])}`+(ok?'':'\n⚠ 沒有涵蓋建議的日期'),ok};
+}
+function setCard(k,text,ok,warn){const c=$('#c-'+k);c.classList.toggle('ok',ok);const s=$('#s-'+k);s.textContent=text;s.classList.toggle('warn',!!warn)}
+function checkCover(){
+  const R=ranges();
+  if(st.inc){const c=coverText([st.inc.start,st.inc.end],R.inc);setCard('inc',`✓ ${st.inc.orders.length} 張訂單\n${c.t}`,true,!c.ok)}
+  if(st.ord){const c=coverText(span(st.ordInfo),R.ord);setCard('ord',`✓ ${Object.keys(st.ord).length} 張訂單\n${c.t}`,true,!c.ok)}
+  if(st.cost){const c=coverText(span(st.cost.map(l=>l.date)),R.cost);setCard('cost',`✓ ${new Set(st.cost.map(l=>l.bline)).size} 張銷貨單\n${c.t}`,true,!c.ok)}
+}
+function bind(k,handler){
+  const c=$('#c-'+k),f=$('#f-'+k);
+  c.addEventListener('dragover',e=>{e.preventDefault();c.classList.add('over')});
+  c.addEventListener('dragleave',()=>c.classList.remove('over'));
+  c.addEventListener('drop',e=>{e.preventDefault();c.classList.remove('over');go([...e.dataTransfer.files])});
+  f.addEventListener('change',()=>{go([...f.files]);f.value=''});
+  async function go(files){
+    if(!files.length)return;setCard(k,'讀取中…',false);
+    try{await handler(files);msg('');checkCover();run()}
+    catch(e){setCard(k,'讀取失敗',false,true);msg(esc(e.message||String(e)),'err')}
+  }
+}
+bind('inc',async files=>{
+  const wb=await openBook(files[0],LS.get('pw',''));const r=rowsOf(wb,'錢包入帳金額');
+  if(!r)throw new Error('這不是蝦皮進帳報表');st.inc=parseIncomeRows(r);
+});
+bind('ord',async files=>{
+  const map={},dates=[];
+  for(const f of files){
+    const wb=await openBook(f,LS.get('pw',''));const r=rowsOf(wb,'商品名稱');
+    if(!r)throw new Error(`「${f.name}」不是蝦皮訂單報表`);
+    const m=parseOrderRows(r);for(const id in m)if(!map[id])map[id]=m[id];
+    const h=r.findIndex(x=>x&&x.includes('訂單成立日期'));const i=r[h].indexOf('訂單成立日期');
+    r.slice(h+1).forEach(x=>{if(x&&x[i])dates.push(toDate(String(x[i]).slice(0,10)))});
+  }
+  st.ord=map;st.ordInfo=dates;
+});
+bind('cost',async files=>{
+  const all=[],seen=new Set();
+  for(const f of files){
+    const wb=await openBook(f,'');const r=rowsOf(wb,'BLINE');
+    if(!r)throw new Error(`「${f.name}」不是系統成本表（找不到 BLINE 欄）`);
+    const ls=parseCostRows(r);const bl=new Set(ls.map(l=>l.bline));
+    ls.forEach(l=>{if(!seen.has(l.bline))all.push(l)});bl.forEach(b=>seen.add(b));
+  }
+  st.cost=all;
+});
+
+// build inputs with carry-over
+function inputs(){
+  const M=monthInfo();const C=st.cloud;
+  const doneO=new Set(),doneS=new Set();
+  if(C)C.done.forEach(r=>{if(r[0]!==M.key){if(r[1])doneO.add(String(r[1]));if(r[2])doneS.add(String(r[2]))}});
+  const inMonth=o=>!o.paid||(o.paid>=M.start&&o.paid<=M.end);
+  st.outside=st.inc.orders.filter(o=>!inMonth(o)).length;
+  const orders=st.inc.orders.filter(o=>inMonth(o)&&!doneO.has(o.id)).map(o=>({...o}));
+  const ids=new Set(orders.map(o=>o.id));
+  if(C)C.pendingOrders.forEach(r=>{
+    const id=String(r[0]);if(ids.has(id)||doneO.has(id)||r[8]===M.key)return;
+    orders.push({id,date:toDate(r[1]),paid:toDate(r[2]),orig:N(r[3]),promo:N(r[4]),refund:N(r[5]),returnShip:N(r[6]),payout:N(r[7]),carried:true,since:r[8]});ids.add(id);
+  });
+  const pend=new Map();
+  if(C)C.pendingLines.forEach(r=>{if(r[9]===M.key)return;const b=String(r[0]);if(!pend.has(b))pend.set(b,{since:r[9],lines:[]});
+    pend.get(b).lines.push({bline:b,date:toDate(r[1]),prodno:String(r[2]),name:String(r[3]),spec:String(r[4]),qty:N(r[5]),price:N(r[6]),sum:N(r[7]),sourp:N(r[8])})});
+  const cost=[];const have=new Set();
+  st.cost.forEach(l=>{if(doneS.has(l.bline))return;const p=pend.get(l.bline);cost.push({...l,sourp0:l.sourp,carried:!!p,since:p?p.since:''});have.add(l.bline)});
+  pend.forEach((p,b)=>{if(have.has(b)||doneS.has(b))return;p.lines.forEach(l=>cost.push({...l,sourp0:l.sourp,carried:true,since:p.since}))});
+  return {orders,cost,M};
+}
+
+function run(){
+  if(!(st.inc&&st.ord&&st.cost)){$('#result').hidden=true;const miss=[!st.inc&&'進帳報表',!st.ord&&'訂單報表',!st.cost&&'成本表'].filter(Boolean);if(st.inc||st.ord||st.cost)msg('還差：'+miss.join('、'));return}
+  const {orders,cost,M}=inputs();
+  const fixed=N(LS.get('fixed',48000));
+  st.res=analyze({cost,income:{orders,start:M.start,end:M.end},orderItems:st.ord,overrides,fixed,target:0.07});
+  st.M=M;st.fixed=fixed;
+  const inLog=st.cloud&&st.cloud.log.some(r=>r[0]===M.key);
+  const notes=[];if(inLog)notes.push(`${M.key} 已經存過一次，再按儲存會覆蓋那個月的紀錄。`);if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
+  msg(notes.join('<br>'),notes.length?'warn':'');
+  $('#result').hidden=false;render();
+}
+
+function pending(){
+  const r=st.res,M=st.M;
+  const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
+  const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
+  return {po,ps,M};
+}
+function render(){
+  const {T}=st.res;const {po,ps}=pending();
+  $('#kpis').innerHTML=[
+    ['本月實際入帳',fm(T.payout),`${T.orders} 張訂單・蝦皮扣 ${fm(Math.abs(T.fee+T.returnShip))}`],
+    ['成本',fm(T.cost),'對到的訂單'],
+    ['利潤',fm(T.profit),T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
+    ['淨利',fm(T.net),`再扣固定成本 ${fm(st.fixed)}`,true],
+    ['待下次對帳',`${po.length} ／ ${ps.length}`,'訂單 ／ 銷貨單']
+  ].map(([l,v,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(v).startsWith('-')?' neg':''}">${v}</span><span class="s">${esc(s)}</span></div>`).join('');
+  const tabs=[['orders','每筆訂單',st.res.orders.length],['pending','待下次對帳',po.length+ps.length],['missing','缺進價',st.res.missing.length]];
+  $('#tabs').innerHTML=tabs.map(([k,n,c])=>`<button class="tab" aria-selected="${st.tab===k}" data-k="${k}">${n}<span class="c">${c}</span></button>`).join('');
+  $('#tabs').querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.filter='all';st.q='';render()});
+  ({orders:rOrders,pending:rPending,missing:rMissing})[st.tab]();
+}
+const pills=fl=>fl.map(([t,l])=>`<span class="pill p-${l}">${esc(t)}</span>`).join('');
+function rOrders(){
+  const f=st.filter,q=st.q.trim().toLowerCase();
+  const list=st.res.orders.filter(o=>{
+    if(f==='loss'&&!(o.profit<0))return false;
+    if(f==='check'&&!o.flags.some(x=>x[1]==='warn'||x[1]==='bad'))return false;
+    if(f==='carried'&&!o.carried)return false;
+    if(q&&!(o.id.toLowerCase().includes(q)||(o.slip&&o.slip.items.toLowerCase().includes(q))))return false;
+    return true});
+  $('#panel').innerHTML=`<div class="filters">${[['all','全部'],['loss','賠錢'],['check','要看一下'],['carried','上次保留']].map(([k,n])=>`<button class="chip" aria-pressed="${f===k}" data-f="${k}">${n}</button>`).join('')}
+  <input class="search" id="q" type="search" placeholder="搜尋訂單編號、商品" value="${esc(st.q)}"></div>
+  <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th>商品</th><th class="r">實際入帳</th><th class="r">成本</th><th class="r">利潤</th><th>備註</th></tr></thead><tbody>${
+  list.map(o=>{const ok=o.slip||o.noSlipRefund;return `<tr class="${ok?'':'unm'}"><td class="num">${md(o.date)}</td><td class="num">${esc(o.id)}</td>
+  <td class="items">${o.slip?esc(o.slip.items):o.noSlipRefund?'（全額退貨）':'（沒對到銷貨單）'}${o.missing&&o.missing.length?`<div class="miss">缺進價：${esc(o.missing.join('、'))}</div>`:''}</td>
+  <td class="r">${fm(o.payout)}</td><td class="r">${ok?fm(o.cost):''}</td><td class="r ${o.profit<0?'neg':''}">${ok?fm(o.profit):''}</td><td>${pills(o.flags.filter(x=>x[0]!=='有商品缺進價'))}</td></tr>`}).join('')
+  }</tbody></table></div><p class="help">顯示 ${list.length} 筆。利潤＝實際入帳 ÷ 1.05 − 成本。</p>`;
+  $('#panel').querySelectorAll('.chip').forEach(b=>b.onclick=()=>{st.filter=b.dataset.f;render()});
+  const qi=$('#q');qi.oninput=()=>{st.q=qi.value;clearTimeout(qi._t);qi._t=setTimeout(()=>{render();const n=$('#q');n.focus();n.setSelectionRange(n.value.length,n.value.length)},250)};
+}
+function rPending(){
+  const {po,ps}=pending();
+  $('#panel').innerHTML=`<p class="help">這些會存到 Google Sheet，下次對帳自動帶進來一起配。確定不用再追的可以按「移除」。</p>
+  <h2>沒對到的訂單（${po.length}）</h2>
+  <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">實際入帳</th><th>原因</th><th>可能是這張</th><th></th></tr></thead><tbody>${
+  po.map(o=>`<tr><td class="num">${md(o.date)}</td><td class="num">${esc(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
+  <td class="items">${o.cand.map(s=>`<div><b class="num">${esc(s.bline)}</b>（${md(s.date)}・${fm(s.total)}）${esc(s.items)}</div>`).join('')||'—'}</td><td><button data-rm="o${esc(o.id)}">移除</button></td></tr>`).join('')||'<tr><td colspan="6">沒有。</td></tr>'
+  }</tbody></table></div>
+  <h2>還沒入帳的銷貨單（${ps.length}）</h2>
+  <div class="tbl"><table><thead><tr><th>開單日</th><th>銷貨單號</th><th class="r">金額</th><th>商品</th><th>狀態</th><th></th></tr></thead><tbody>${
+  ps.map(s=>`<tr><td class="num">${md(s.date)}</td><td class="num">${esc(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td>
+  <td><span class="pill p-${s.lv==='warn'?'warn':'info'}">${esc(s.why)}</span>${s.since?`<div class="help">保留自 ${esc(s.since)}</div>`:''}</td><td><button data-rm="s${esc(s.bline)}">移除</button></td></tr>`).join('')||'<tr><td colspan="6">沒有。</td></tr>'
+  }</tbody></table></div>`;
+  $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);render()});
+}
+function rMissing(){
+  const list=st.res.missing;
+  $('#panel').innerHTML=`<p class="help">系統進價是 0，先用平均成本率估算。在這裡填正確的未稅進價會馬上重算（記在這台電腦），也請回系統補上。</p>
+  <div class="tbl"><table><thead><tr><th>商品編號</th><th>品名</th><th class="r">售價</th><th class="r">數量</th><th>填進價</th></tr></thead><tbody>${
+  list.map(m=>`<tr><td class="num">${esc(m.prodno)}</td><td>${esc(m.name)} <span class="help">${esc(m.spec)}</span></td><td class="r">${fm(m.price)}</td><td class="r">${m.qty}</td>
+  <td><input class="cost" type="number" step="0.01" data-p="${esc(m.prodno)}" aria-label="${esc(m.name)} 進價"></td></tr>`).join('')||'<tr><td colspan="5">沒有缺進價的商品。</td></tr>'
+  }</tbody></table></div>`;
+  $('#panel').querySelectorAll('input.cost').forEach(i=>i.onchange=()=>{if(i.value==='')return;overrides[i.dataset.p]=N(i.value);LS.set('costOverrides',overrides);run()});
+}
+
+// save
+function payload(){
+  const r=st.res,{po,ps,M}=pending(),T=r.T;
+  const done=r.orders.filter(o=>o.slip||o.noSlipRefund).map(o=>[o.id,o.slip?o.slip.bline:'']);
+  const pendingOrders=po.map(o=>[o.id,ymd(o.date),ymd(o.paid),o.orig,o.promo,o.refund,o.returnShip,o.payout,o.since||M.key,o.why]);
+  const pendingLines=[];ps.forEach(s=>s.lines.forEach(l=>pendingLines.push([s.bline,ymd(s.date),l.prodno,l.name,l.spec,l.qty,l.price,l.sum,l.sourp0??l.sourp,s.since||M.key,s.why])));
+  const summary=[T.orders,Math.round(T.payout),Math.round(T.cost),Math.round(T.profit),st.fixed,Math.round(T.net),T.carriedMatched,po.length,ps.length];
+  return {key:LS.get('key',''),month:M.key,done,pendingOrders,pendingLines,summary};
+}
+$('#b-save').onclick=async()=>{
+  const url=LS.get('url',SHEET_URL);if(!url){$('#settings').open=true;msg('請先在設定填 Google Sheet 連結。','warn');return}
+  const b=$('#b-save');b.disabled=true;b.textContent='儲存中…';
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload())});
+    const j=await r.json();if(!j.ok)throw new Error(j.error||'儲存失敗');
+    msg(`已存到 Google Sheet：${st.M.key} 的對帳紀錄，以及待下次對帳的資料。`,'ok');
+    await loadCloud();
+  }catch(e){msg('儲存失敗：'+esc(e.message),'err')}
+  b.disabled=false;b.textContent='儲存到 Google Sheet';
+};
+$('#b-xlsx').onclick=()=>{
+  const r=st.res,{po,ps,M}=pending(),T=r.T,wb=XLSX.utils.book_new();
+  const add=(n,rows)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.length?rows:[{'':'（無）'}]),n);
+  add('總結',[{項目:'對帳月份',數值:M.key},{項目:'訂單數',數值:T.orders},{項目:'實際入帳',數值:Math.round(T.payout)},{項目:'成本',數值:Math.round(T.cost)},{項目:'利潤',數值:Math.round(T.profit)},{項目:'固定成本',數值:st.fixed},{項目:'淨利',數值:Math.round(T.net)},{項目:'補對上次保留',數值:T.carriedMatched},{項目:'待下次訂單',數值:po.length},{項目:'待下次銷貨單',數值:ps.length}]);
+  add('每筆訂單',r.orders.map(o=>({訂單日:ymd(o.date),入帳日:ymd(o.paid),蝦皮訂單編號:o.id,銷貨單號:o.slip?o.slip.bline:'',商品:o.slip?o.slip.items:'',賣價:o.sale,退款:o.refund,蝦皮扣款:o.fee,退貨運費:o.returnShip,實際入帳:o.payout,成本:(o.slip||o.noSlipRefund)?o.cost:'',利潤:(o.slip||o.noSlipRefund)?o.profit:'',缺進價:(o.missing||[]).join('、'),備註:o.flags.map(x=>x[0]).join('；')})));
+  add('待下次訂單',po.map(o=>({訂單日:ymd(o.date),蝦皮訂單編號:o.id,實際入帳:o.payout,原因:o.why,保留自:o.since||M.key})));
+  add('待下次銷貨單',ps.map(s=>({開單日:ymd(s.date),銷貨單號:s.bline,金額:s.total,商品:s.items,狀態:s.why,保留自:s.since||M.key})));
+  add('缺進價',r.missing.map(m=>({商品編號:m.prodno,品名:m.name,規格:m.spec,售價:m.price,數量:m.qty})));
+  XLSX.writeFile(wb,`蝦皮利潤對帳_${M.key.replace('/','')}.xlsx`);
+};
+loadCloud();
+</script>
+</body>
+</html>
