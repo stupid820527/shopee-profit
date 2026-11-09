@@ -88,6 +88,8 @@ td input.cost{width:96px;font:inherit;font-family:var(--f-num);font-size:14px;pa
 .help{font-size:13px;color:var(--muted);margin:0}
 h2{font-size:16px;margin:6px 0 0}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
+.eye{display:inline-flex;align-items:center;gap:6px}
+.eye[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 @media (max-width:600px){h1{font-size:20px}.kpi .v{font-size:18px}}
 </style>
 </head>
@@ -138,6 +140,7 @@ h2{font-size:16px;margin:6px 0 0}
   <section id="result" hidden>
     <div class="kpis" id="kpis"></div>
     <div class="actions" style="margin-top:12px">
+      <button id="b-eye" class="eye" aria-pressed="false"></button>
       <button class="primary" id="b-save">儲存到 Google Sheet</button>
       <button id="b-xlsx">下載 Excel</button>
     </div>
@@ -700,18 +703,22 @@ function showSnapshot(){
   render();
 }
 
+const EYE_OPEN='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17.9 17.9A10.4 10.4 0 0 1 12 19C5 19 1 12 1 12a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9.6 9.6 0 0 1 12 4c7 0 11 7 11 7a18.6 18.6 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M1 1l22 22"/></svg>';
+const hide=v=>st.show?fm(v):'＊＊＊＊';
+function eyeBtn(){const b=$('#b-eye');b.innerHTML=(st.show?EYE_OPEN:EYE_OFF)+`<span>${st.show?'隱藏成本、利潤':'顯示成本、利潤'}</span>`;b.setAttribute('aria-pressed',st.show)}
 const md2=s=>s?String(s).slice(5).replace(/^0/,'').replace('/0','/'):'';
 function render(){
   const v=st.vm,T=v.T;
   $('#kpis').innerHTML=[
     [`${v.month} 實際入帳`,fm(T.payout),`${T.orders} 張訂單`],
     ['蝦皮總共扣',fm(Math.abs(T.fee)),v.fees&&v.fees.base?`佔營業額 ${pc(Math.abs(v.fees.total)/v.fees.base)}`:''],
-    ['成本',fm(T.cost),'對到的訂單'],
-    ['利潤',fm(T.profit),T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
-    ['淨利',fm(T.net),`再扣固定成本 ${fm(v.fixed)}`,true],
+    ['成本',hide(T.cost),'對到的訂單'],
+    ['利潤',hide(T.profit),T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
+    ['淨利',hide(T.net),`再扣固定成本 ${fm(v.fixed)}`,true],
     ['待下次對帳',`${v.po.length} 筆 ／ ${v.ps.length} 張`,'沒對到的蝦皮訂單 ／ 還沒入帳的銷貨單']
   ].map(([l,x,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(x).startsWith('-')?' neg':''}">${x}</span><span class="s">${esc(s)}</span></div>`).join('');
-  $('#b-save').hidden=!st.live;
+  $('#b-save').hidden=!st.live;eyeBtn();
   const tabs=[['orders','每筆訂單',v.orders.length],['fees','蝦皮費用',''],['pending','待下次對帳',v.po.length+v.ps.length],['missing','缺進價',v.missing.length]];
   $('#tabs').innerHTML=tabs.map(([k,n,c])=>`<button class="tab" aria-selected="${st.tab===k}" data-k="${k}">${n}<span class="c">${c}</span></button>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.filter='all';st.q='';render()});
@@ -746,7 +753,7 @@ function rOrders(){
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th>商品</th><th class="r">實際入帳</th><th class="r">成本</th><th class="r">利潤</th><th>備註</th></tr></thead><tbody>${
   list.map(o=>`<tr class="${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}"><td class="num">${md2(o.date)}</td><td class="num">${esc(o.id)}</td>
   <td class="items">${esc(o.items)}${o.missing?`<div class="miss">缺進價：${esc(o.missing)}</div>`:''}</td>
-  <td class="r">${fm(o.payout)}</td><td class="r">${o.ok?fm(o.cost):''}</td><td class="r ${o.profit<0?'neg':''}">${o.ok?fm(o.profit):''}</td><td>${pills(o.flags)}</td></tr>`).join('')
+  <td class="r">${fm(o.payout)}</td><td class="r">${o.ok?hide(o.cost):''}</td><td class="r ${st.show&&o.profit<0?'neg':''}">${o.ok?hide(o.profit):''}</td><td>${pills(o.flags)}</td></tr>`).join('')
   }</tbody></table></div><p class="help">顯示 ${list.length} 筆。紅底＝沒對到、粉紅底＝賠錢、黃底＝要看一下。利潤＝實際入帳 ÷ 1.05 − 成本。</p>`;
   $('#panel').querySelectorAll('.chip').forEach(b=>b.onclick=()=>{st.filter=b.dataset.f;render()});
   const qi=$('#q');qi.oninput=()=>{st.q=qi.value;clearTimeout(qi._t);qi._t=setTimeout(()=>{render();const n=$('#q');n.focus();n.setSelectionRange(n.value.length,n.value.length)},250)};
@@ -816,6 +823,7 @@ async function save(auto){
   b.disabled=false;b.textContent='重新儲存';
 }
 $('#b-save').onclick=()=>save(false);
+$('#b-eye').onclick=()=>{st.show=!st.show;render()};
 
 // Excel with the same colours as the screen
 const FILL={unm:'F8CBAD',loss:'FCE4E4',chk:'FFF2CC',head:'1F3864'};
