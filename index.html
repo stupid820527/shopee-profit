@@ -24,7 +24,7 @@
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
-.wrap{max-width:1180px;margin:0 auto;padding-block:20px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:16px}
+.wrap{max-width:1320px;margin:0 auto;padding-block:20px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:16px}
 h1{font-size:24px;margin:0}
 .sub{color:var(--muted);margin:2px 0 0;font-size:14px}
 .row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
@@ -86,12 +86,21 @@ tr.chk td{background:var(--warn-bg)}
 .miss{color:var(--warn);font-size:13px}
 td input.cost{width:96px;font:inherit;font-family:var(--f-num);font-size:14px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}
 .help{font-size:13px;color:var(--muted);margin:0}
+table.orders{font-size:13px}
+table.orders th,table.orders td{padding:6px 6px}
+table.orders th{white-space:normal;line-height:1.3}
+table.orders td.items{min-width:150px;max-width:240px}
+table.orders .oid{font-size:12px;color:var(--muted)}
+th.sort{cursor:pointer;user-select:none}
+th.sort:hover{color:var(--accent)}
 tr.clk{cursor:pointer}
 tr.clk:hover td{filter:brightness(.97)}
-tr.detrow>td{background:var(--soft);padding:12px}
-.det{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+tr.detrow>td{background:var(--soft);padding:10px 12px}
+.det{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+.det>div{flex:0 1 auto}
 .det h3{font-size:14px;margin:0 0 6px}
-table.mini{background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:13px}
+.payline{font-size:14px;margin-bottom:10px}
+table.mini{width:auto;min-width:300px;max-width:420px;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:13px}
 table.mini td,table.mini th{padding:4px 10px;border-top:1px solid var(--line);position:static}
 table.mini tr.sub td:first-child{padding-left:26px;color:var(--muted)}
 table.mini tr.tot td{font-weight:700;border-top:2px solid var(--line)}
@@ -734,6 +743,7 @@ function liveVM(){
     orders:r.orders.map(o=>{const ok=!!(o.slip||o.noSlipRefund);return {date:ymd(o.date),paid:ymd(o.paid),id:o.id,bline:o.slip?o.slip.bline:'',
       items:o.slip?o.slip.items:o.noSlipRefund?'（全額退貨）':'（沒對到銷貨單）',sale:o.sale,refund:o.refund,fee:o.fee,rs:o.returnShip,payout:o.payout,
       ship:('shipPaid' in o)?(o.buyerShip+o.shipSub+o.shipPaid+o.returnShip):o.returnShip,
+      method:o.method||'',rate:o.rate||'',
       d:('shipPaid' in o)?{commission:o.commission,service:o.service,payfee:o.payfee,other:o.ams+o.coupon+o.comp,buyerShip:o.buyerShip,shipSub:o.shipSub,shipPaid:o.shipPaid,returnShip:o.returnShip,inv:o.carried?0:-N(LS.get('invfee',2))}:null,
       lines:o.slip?o.slip.lines.map(l=>[l.name,Math.round(l.qty*o.keep*100)/100,Math.round(l.sum*o.keep),Math.round(l.cost*o.keep)]):[],
       chg:o.payout-o.rev-(('shipPaid' in o)?(o.buyerShip+o.shipSub+o.shipPaid+o.returnShip):o.returnShip),
@@ -809,30 +819,43 @@ function detail(o){
     ${o.lines.map(l=>`<tr><td>${esc(l[0])}</td><td class="r">${l[1]}</td><td class="r">${fm(l[2])}</td><td class="r">${hide(l[3])}</td></tr>`).join('')}
     <tr class="tot"><td>利潤（未稅）</td><td></td><td></td><td class="r ${st.show&&o.profit<0?'neg':''}">${o.ok?hide(o.profit):''}</td></tr></tbody></table>
     <p class="help">利潤＝（實際入帳${d&&d.inv?' − 代開發票':''}）÷ 1.05 − 成本</p>`:'<p class="help">沒有對到銷貨單，看不到品項成本。</p>';
-  return `<div class="det"><div><h3>蝦皮扣款明細</h3>${left}</div><div><h3>品項與成本</h3>${right}</div></div>`;
+  const pay=o.method?`<div class="payline">付款方式：<b>${esc(o.method)}</b>${o.rate?`　金流費率 ${esc(o.rate)}`:''}${d?`　金流費 ${fm(d.payfee)}`:''}</div>`:'';
+  return `${pay}<div class="det"><div><h3>蝦皮扣款明細</h3>${left}</div><div><h3>品項與成本</h3>${right}</div></div>`;
 }
+const SORTS=[['sale','商品金額'],['refund','退款'],['commission','成交費'],['service','服務費'],['payfee','金流費'],['ship','運費'],['inv','發票'],['ded','扣款合計'],['payout','實際入帳'],['cost','成本'],['profit','利潤']];
+function sv(o,k){const d=o.d||{};switch(k){
+  case 'sale':return o.sale;case 'refund':return o.refund;case 'payout':return o.payout;
+  case 'cost':return o.ok?o.cost:null;case 'profit':return o.ok?o.profit:null;case 'ded':return ded(o);
+  case 'ship':return o.d?d.buyerShip+d.shipSub+d.shipPaid+d.returnShip:null;
+  default:return o.d?d[k]:null}}
 function rOrders(){
   const f=st.filter,q=st.q.trim().toLowerCase();st.open=st.open||new Set();
-  const list=st.vm.orders.filter(o=>{
+  let list=st.vm.orders.filter(o=>{
     if(f==='loss'&&!(o.profit<0))return false;
     if(f==='check'&&!isCheck(o))return false;
     if(f==='carried'&&!o.carried)return false;
     if(q&&!(o.id.toLowerCase().includes(q)||o.items.toLowerCase().includes(q)))return false;
     return true});
+  const S=st.sort;
+  if(S&&S.k&&!(['cost','profit'].includes(S.k)&&!st.show)){list=[...list].sort((a,b)=>{const x=sv(a,S.k),y=sv(b,S.k);if(x==null&&y==null)return 0;if(x==null)return 1;if(y==null)return -1;return S.dir*(x-y)})}
+  const NEGK=['refund','commission','service','payfee','ship','inv','ded'];
+  const arrow=k=>S&&S.k===k?((NEGK.includes(k)?S.dir>0:S.dir<0)?' ↓大':' ↑小'):'';
   $('#panel').innerHTML=`<div class="filters">${[['all','全部'],['loss','賠錢'],['check','要看一下'],['carried','上次保留']].map(([k,n])=>`<button class="chip" aria-pressed="${f===k}" data-f="${k}">${n}</button>`).join('')}
   <input class="search" id="q" type="search" placeholder="搜尋訂單編號、商品" value="${esc(st.q)}"></div>
-  <p class="help">每一筆的蝦皮扣款都分開列；點一下訂單，可以看運費細項和每個品項的成本。</p>
-  <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th>商品</th><th class="r">商品金額</th><th class="r">退款</th><th class="r">成交手續費</th><th class="r">服務費</th><th class="r">金流費</th><th class="r">運費</th><th class="r">代開發票</th><th class="r">扣款合計</th><th class="r">實際入帳</th><th class="r">成本</th><th class="r">利潤</th><th>備註</th></tr></thead><tbody>${
-  list.map(o=>{const t=ded(o),b=o.sale+o.refund,op=st.open.has(o.id);
-  return `<tr data-id="${esc(o.id)}" class="clk ${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}"><td class="num">${op?'▾':'▸'} ${md2(o.date)}</td><td class="num">${esc(o.id)}</td>
-  <td class="items">${esc(o.items)}${o.missing?`<div class="miss">缺進價：${esc(o.missing)}</div>`:''}</td>
+  <p class="help">點欄位名稱可以排序：第一次由大到小（扣款是扣最多的排前面），再點一次反過來；點訂單看付款方式、運費細項和品項成本。</p>
+  <div class="tbl"><table class="orders"><thead><tr><th>日期／訂單</th><th>商品</th>${SORTS.map(([k,n])=>`<th class="r sort" data-s="${k}" title="點一下排序">${n}${arrow(k)}</th>`).join('')}</tr></thead><tbody>${
+  list.map(o=>{const t=ded(o),b=o.sale+o.refund,op=st.open.has(o.id),d=o.d;
+  return `<tr data-id="${esc(o.id)}" class="clk ${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}">
+  <td class="num">${op?'▾':'▸'} ${md2(o.date)}<div class="oid">${esc(o.id)}</div></td>
+  <td class="items">${esc(o.items)}${o.missing?`<div class="miss">缺進價：${esc(o.missing)}</div>`:''}${o.flags.length?`<div>${pills(o.flags)}</div>`:''}</td>
   <td class="r">${fm(o.sale)}</td><td class="r ${o.refund?'neg':''}">${o.refund?fm(o.refund):''}</td>
-  ${o.d?[o.d.commission,o.d.service,o.d.payfee,o.d.buyerShip+o.d.shipSub+o.d.shipPaid+o.d.returnShip,o.d.inv].map(x=>`<td class="r ${x<0?'neg':''}">${x?fm(x):'0'}</td>`).join(''):`<td class="r" colspan="5">${fm(o.chg??o.fee)}（上次保留，無明細）</td>`}
+  ${d?[d.commission,d.service,d.payfee,d.buyerShip+d.shipSub+d.shipPaid+d.returnShip,d.inv].map(x=>`<td class="r ${x<0?'neg':''}">${x?fm(x):'0'}</td>`).join(''):`<td class="r" colspan="5">${fm(o.chg??o.fee)}<div class="help">上次保留</div></td>`}
   <td class="r neg"><b>${fm(t)}</b><div class="help">${b>0?(Math.abs(t)/b*100).toFixed(1)+'%':''}</div></td>
-  <td class="r"><b>${fm(o.payout)}</b></td><td class="r">${o.ok?hide(o.cost):''}</td><td class="r ${st.show&&o.profit<0?'neg':''}">${o.ok?hide(o.profit):''}</td><td>${pills(o.flags)}</td></tr>
-  ${op?`<tr class="detrow"><td colspan="15">${detail(o)}</td></tr>`:''}`}).join('')
-  }</tbody></table></div><p class="help">顯示 ${list.length} 筆。紅底＝沒對到、粉紅底＝賠錢、黃底＝要看一下。扣款合計＝成交手續費＋服務費＋金流費＋運費＋代開發票，% 是佔商品金額（扣退款後）。運費＝蝦皮代付物流費扣掉買家付的和蝦皮補助，含退貨運費。</p>`;
+  <td class="r"><b>${fm(o.payout)}</b></td><td class="r">${o.ok?hide(o.cost):''}</td><td class="r ${st.show&&o.profit<0?'neg':''}">${o.ok?hide(o.profit):''}</td></tr>
+  ${op?`<tr class="detrow"><td colspan="13">${detail(o)}</td></tr>`:''}`}).join('')
+  }</tbody></table></div><p class="help">顯示 ${list.length} 筆。紅底＝沒對到、粉紅底＝賠錢、黃底＝要看一下。扣款合計＝成交費＋服務費＋金流費＋運費＋代開發票，% 是佔商品金額（扣退款後）。${!st.show?'成本、利潤要先打開小眼睛才能排序。':''}</p>`;
   $('#panel').querySelectorAll('.chip').forEach(b=>b.onclick=()=>{st.filter=b.dataset.f;render()});
+  $('#panel').querySelectorAll('th.sort').forEach(th=>th.onclick=()=>{const k=th.dataset.s;st.sort=st.sort&&st.sort.k===k?{k,dir:-st.sort.dir}:{k,dir:['refund','commission','service','payfee','ship','inv','ded'].includes(k)?1:-1};rOrders()});
   $('#panel').querySelectorAll('tr.clk').forEach(tr=>tr.onclick=()=>{const id=tr.dataset.id;st.open.has(id)?st.open.delete(id):st.open.add(id);const y=window.scrollY,sc=$('.tbl').scrollTop;rOrders();$('.tbl').scrollTop=sc;window.scrollTo(0,y)});
   const qi=$('#q');qi.oninput=()=>{st.q=qi.value;clearTimeout(qi._t);qi._t=setTimeout(()=>{render();const n=$('#q');n.focus();n.setSelectionRange(n.value.length,n.value.length)},250)};
 }
