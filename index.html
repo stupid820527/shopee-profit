@@ -130,7 +130,11 @@ h2{font-size:16px;margin:6px 0 0}
   </details>
 
   <div class="row">
-    <label class="field">對帳月份（蝦皮撥款的月份）<input id="i-month" type="month"></label>
+    <label class="field">從<input id="i-from" type="date"></label>
+    <label class="field">到<input id="i-to" type="date"></label>
+    <div class="filters" style="align-self:end">
+      <button class="chip" data-q="today">今天</button><button class="chip" data-q="yday">昨天</button><button class="chip" data-q="2d">近 2 天</button><button class="chip" data-q="7d">近 7 天</button><button class="chip" data-q="month">本月到今天</button><button class="chip" data-q="last">上個月（月結）</button>
+    </div>
     <span id="cloud" class="help"></span>
   </div>
 
@@ -142,12 +146,12 @@ h2{font-size:16px;margin:6px 0 0}
       <span class="st" id="s-inc">尚未選擇</span></label>
     <label class="card" id="c-ord"><input type="file" id="f-ord" accept=".xlsx,.xls" multiple>
       <span class="t">② 蝦皮訂單報表<span class="tag req">必要</span></span>
-      <span class="range">抓取日期（訂單成立日）：<b id="r-ord"></b></span>
+      <span class="range">抓取日期（訂單成立日，往前多抓 20 天）：<b id="r-ord"></b></span>
       <span class="h">賣家中心 → 我的銷售 →「全部」→ 匯出。一次最多一個月，可以一次選兩個檔。</span>
       <span class="st" id="s-ord">尚未選擇</span></label>
     <label class="card" id="c-cost"><input type="file" id="f-cost" accept=".xlsx,.xls,.csv" multiple>
       <span class="t">③ 系統成本表<span class="tag req">必要</span></span>
-      <span class="range">抓取日期（開單日）：<b id="r-cost"></b></span>
+      <span class="range">抓取日期（開單日，往前多抓 30 天）：<b id="r-cost"></b></span>
       <span class="h">系統匯出的銷貨明細（客戶蝦皮）。可以一次選多個檔。</span>
       <span class="st" id="s-cost">尚未選擇</span></label>
     <label class="card" id="c-mat"><input type="file" id="f-mat" accept=".xlsx,.xls">
@@ -586,6 +590,7 @@ const st={inc:null,ord:null,ordInfo:[],cost:null,costInfo:[],cloud:null,res:null
 const FIXED_DEFAULT=[['薪資',30000],['全勤獎金',2000],['包貨獎金',3000],['勞健保、勞退（公司負擔）',6500],['寄貨車趟（油錢、車子）',4000],['紙箱、耗材',2500]];
 let fixedItems=LS.get('fixedItems',FIXED_DEFAULT);
 const fixedTotal=()=>fixedItems.reduce((s,r)=>s+N(r[1]),0);
+const fixedFor=v=>v&&v.isMonth===false?fixedTotal()*v.days/v.mdays:fixedTotal(); // monthly fixed cost spread over the chosen days
 const taxRate=()=>N(LS.get('taxRate',20))/100;
 const afterTax=net=>net>0?net*(1-taxRate()):net;
 let ovr=LS.get('costOverrides2',{});
@@ -599,14 +604,25 @@ const SHEET_URL='https://script.google.com/macros/s/AKfycbxEQ4CodEnrbQJ4MhtGHNrR
   const el=$(id);el.value=LS.get(k,d);el.addEventListener('change',()=>{LS.set(k,el.value);if(k==='url'||k==='key')loadCloud();else run()});
 });
 if(!LS.get('pw',''))$('#settings').open=true;
-(function(){const t=new Date();const p=new Date(t.getFullYear(),t.getMonth()-1,1);$('#i-month').value=LS.get('month',`${p.getFullYear()}-${String(p.getMonth()+1).padStart(2,'0')}`)})();
-$('#i-month').addEventListener('change',()=>{LS.set('month',$('#i-month').value);showRanges();checkCover();run()});
-
+const dIn=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+function setRange(a,b){$('#i-from').value=dIn(a);$('#i-to').value=dIn(b);LS.set('range',[dIn(a),dIn(b)]);showRanges();checkCover();run()}
+(function(){const t=new Date();const r=LS.get('range',null);
+  if(r){$('#i-from').value=r[0];$('#i-to').value=r[1]}else{const a=new Date(t.getFullYear(),t.getMonth()-1,1),b=new Date(t.getFullYear(),t.getMonth(),0);$('#i-from').value=dIn(a);$('#i-to').value=dIn(b)}})();
+['#i-from','#i-to'].forEach(id=>$(id).addEventListener('change',()=>{LS.set('range',[$('#i-from').value,$('#i-to').value]);showRanges();checkCover();run()}));
+document.querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>{const t=new Date(),T=new Date(t.getFullYear(),t.getMonth(),t.getDate()),q=b.dataset.q;
+  if(q==='today')setRange(T,T);else if(q==='yday'){const y=new Date(+T-DAY);setRange(y,y)}
+  else if(q==='2d')setRange(new Date(+T-DAY),T);else if(q==='7d')setRange(new Date(+T-6*DAY),T);
+  else if(q==='month')setRange(new Date(T.getFullYear(),T.getMonth(),1),T);
+  else if(q==='last')setRange(new Date(T.getFullYear(),T.getMonth()-1,1),new Date(T.getFullYear(),T.getMonth(),0))});
 function monthInfo(){
-  const [y,m]=$('#i-month').value.split('-').map(Number);
-  return {key:$('#i-month').value.replace('-','/'),start:new Date(y,m-1,1),end:new Date(y,m,0),prevStart:new Date(y,m-2,1),prev15:new Date(y,m-2,15)};
+  const a=toDate($('#i-from').value),b=toDate($('#i-to').value)||a;
+  const start=a&&b&&a>b?b:a,end=a&&b&&a>b?a:b;
+  const isMonth=start.getDate()===1&&end.getMonth()===start.getMonth()&&end.getFullYear()===start.getFullYear()&&new Date(end.getFullYear(),end.getMonth()+1,0).getDate()===end.getDate();
+  const key=isMonth?`${start.getFullYear()}/${String(start.getMonth()+1).padStart(2,'0')}`:(+start===+end?ymd(start):`${ymd(start)}–${md(end)}`);
+  const days=Math.round((end-start)/DAY)+1,mdays=new Date(start.getFullYear(),start.getMonth()+1,0).getDate();
+  return {key,start,end,isMonth,days,mdays,ordFrom:new Date(+start-20*DAY),costFrom:new Date(+start-30*DAY)};
 }
-function ranges(){const M=monthInfo();return {inc:[M.start,M.end],ord:[M.prev15,M.end],cost:[M.prevStart,M.end]}}
+function ranges(){const M=monthInfo();return {inc:[M.start,M.end],ord:[M.ordFrom,M.end],cost:[M.costFrom,M.end]}}
 function showRanges(){const R=ranges();for(const k of ['inc','ord','cost'])$('#r-'+k).textContent=`${ymd(R[k][0])} ～ ${ymd(R[k][1])}`}
 showRanges();
 setTimeout(matStatus,0);
@@ -711,7 +727,7 @@ bind('cost',async files=>{
 
 // build inputs with carry-over
 function inputs(){
-  const M=monthInfo();const C=st.cloud;
+  const M=monthInfo();const C=M.isMonth?st.cloud:null; // a few days' check never mixes in or changes the monthly carry-over
   const doneO=new Set(),doneS=new Set();
   if(C)C.done.forEach(r=>{if(r[0]!==M.key){if(r[1])doneO.add(String(r[1]));if(r[2])doneS.add(String(r[2]))}});
   const inMonth=o=>!o.paid||(o.paid>=M.start&&o.paid<=M.end);
@@ -746,6 +762,7 @@ function run(){
   if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
   st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
   const notes=[];
+  if(!M.isMonth)notes.push(`查看 ${M.key}（${M.days} 天）：只看這段期間有沒有賺錢，不存檔、不影響每月對帳。固定成本照天數分攤。`);
   if(st.estimated)notes.push(`沒有上傳進帳報表：用訂單報表裡「${M.key} 完成」的訂單和蝦皮手續費來算，跟實際入帳通常只差幾元。要完全精準再上傳進帳報表。`);
   if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
   msg(notes.join('<br>'),notes.length?'warn':'');
@@ -775,7 +792,7 @@ function liveVM(){
   const r=st.res,M=st.M,T=r.T;
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
   const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
-  return {month:M.key,savedAt:'',fixed:st.fixed,estimated:!!st.estimated,
+  return {month:M.key,isMonth:M.isMonth,days:M.days,mdays:M.mdays,savedAt:'',fixed:st.fixed,estimated:!!st.estimated,
     T:{orders:T.orders,payout:T.payout,fee:T.fee+T.returnShip-T.invoice,cost:T.cost,profit:T.profit,net:T.net,carriedMatched:T.carriedMatched,missingOrders:T.missingOrders},
     orders:r.orders.map(o=>{const ok=!!(o.slip||o.noSlipRefund);return {date:ymd(o.date),paid:ymd(o.paid),id:o.id,bline:o.slip?o.slip.bline:'',
       items:o.slip?o.slip.items:o.noSlipRefund?'（全額退貨）':'（沒對到銷貨單）',sale:o.sale,refund:o.refund,fee:o.fee,rs:o.returnShip,payout:o.payout,
@@ -811,11 +828,11 @@ function render(){
     ['蝦皮總共扣',fm(Math.abs(T.fee)),v.fees&&v.fees.base?`佔營業額 ${pc(Math.abs(v.fees.total)/v.fees.base)}`:''],
     ['成本',hide(T.cost),'對到的訂單'],
     ['利潤',hide(T.profit),T.missingOrders?`還有 ${T.missingOrders} 筆缺進價`:T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
-    ['淨利（稅前）',hide(T.profit-fixedTotal()),`再扣固定成本 ${fm(fixedTotal())}（可在「固定成本」調整）`],
-    ['稅後淨利',hide(afterTax(T.profit-fixedTotal())),`預估所得稅 ${Math.round(taxRate()*100)}%`,true],
-    ['要核對',`${v.po.length+v.ps.filter(s=>s.lv==='warn').length}`,`另有 ${v.ps.filter(s=>s.lv!=='warn').length} 張銷貨單還沒入帳，已轉到下次對帳`]
+    ['淨利（稅前）',hide(T.profit-fixedFor(v)),v.isMonth===false?`再扣 ${v.days} 天的固定成本 ${fm(fixedFor(v))}`:`再扣固定成本 ${fm(fixedTotal())}（可在「固定成本」調整）`],
+    ['稅後淨利',hide(afterTax(T.profit-fixedFor(v))),`預估所得稅 ${Math.round(taxRate()*100)}%`,true],
+    v.isMonth===false?['要核對','—','查看幾天時不做對帳，選整個月才會對帳、存檔']:['要核對',`${v.po.length+v.ps.filter(s=>s.lv==='warn').length}`,`另有 ${v.ps.filter(s=>s.lv!=='warn').length} 張銷貨單還沒入帳，已轉到下次對帳`]
   ].map(([l,x,s,h])=>`<div class="kpi${h?' hl':''}"><span class="l">${l}</span><span class="v${String(x).startsWith('-')?' neg':''}">${x}</span><span class="s">${esc(s)}</span></div>`).join('');
-  $('#b-save').hidden=!st.live;eyeBtn();
+  $('#b-save').hidden=!st.live||v.isMonth===false;eyeBtn();
   const nm=v.missing.filter(m=>!ovr[m.prodno]).length;
   $('#alert').innerHTML=nm?`<div class="banner err" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between"><span><b>有 ${nm} 項商品找不到成本</b>（${T.missingOrders||0} 筆訂單受影響），這些先算成 0，利潤還不準。請手動填進價，贈品按「免費」。</span><button class="primary" id="b-gomiss">去補進價</button></div>`:'';
   const g=$('#b-gomiss');if(g)g.onclick=()=>{st.tab='missing';render();$('#tabs').scrollIntoView({behavior:'smooth'})};
@@ -981,6 +998,7 @@ function payload(){
 }
 async function save(auto){
   if(!st.live)return;
+  if(!st.M.isMonth){$('#cloud').textContent='這是查看幾天的結果，不會存到 Google Sheet，也不影響每月對帳。整個月對帳時才會存檔。';return}
   const url=LS.get('url',SHEET_URL);if(!url){if(!auto){$('#settings').open=true;msg('請先在設定填 Google Sheet 連結。','warn')}return}
   const b=$('#b-save');b.disabled=true;b.textContent='儲存中…';
   try{
@@ -1011,7 +1029,7 @@ function styledSheet(header,rows,rowClass,moneyCols,widths){
 }
 $('#b-xlsx').onclick=()=>{
   const v=st.vm,T=v.T,wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],...fixedItems.map(r=>['固定成本：'+r[0],N(r[1])]),['固定成本合計',fixedTotal()],['淨利（稅前）',Math.round(T.profit-fixedTotal())],['預估所得稅率',Math.round(taxRate()*100)+'%'],['稅後淨利',Math.round(afterTax(T.profit-fixedTotal()))],['補對上次保留',T.carriedMatched],['要核對（沒對到訂單＋該入帳沒對到的單）',v.po.length+v.ps.filter(s=>s.lv==='warn').length],['轉下月對帳的銷貨單',v.ps.filter(s=>s.lv!=='warn').length],['蝦皮總共扣',Math.round(T.fee)],['蝦皮扣款佔營業額',v.fees&&v.fees.base?pc(Math.abs(v.fees.total)/v.fees.base):''],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
+  XLSX.utils.book_append_sheet(wb,styledSheet(['項目','數值'],[['對帳月份',v.month],['訂單數',T.orders],['實際入帳',Math.round(T.payout)],['成本',Math.round(T.cost)],['利潤',Math.round(T.profit)],...fixedItems.map(r=>['固定成本：'+r[0],N(r[1])]),['固定成本（這段期間）',Math.round(fixedFor(v))],['淨利（稅前）',Math.round(T.profit-fixedFor(v))],['預估所得稅率',Math.round(taxRate()*100)+'%'],['稅後淨利',Math.round(afterTax(T.profit-fixedFor(v)))],['補對上次保留',T.carriedMatched],['要核對（沒對到訂單＋該入帳沒對到的單）',v.po.length+v.ps.filter(s=>s.lv==='warn').length],['轉下月對帳的銷貨單',v.ps.filter(s=>s.lv!=='warn').length],['蝦皮總共扣',Math.round(T.fee)],['蝦皮扣款佔營業額',v.fees&&v.fees.base?pc(Math.abs(v.fees.total)/v.fees.base):''],['顏色說明','紅＝沒對到、粉紅＝賠錢、黃＝要看一下']],null,[1],[16,40]),'總結');
   const O=v.orders;
   XLSX.utils.book_append_sheet(wb,styledSheet(['訂單日','入帳日','蝦皮訂單編號','銷貨單號','商品','商品金額','退款','成交手續費','其他服務費','金流處理費','買家付運費','蝦皮代付運費','蝦皮補助運費','退貨運費','其他','實際入帳','代開發票','蝦皮總共扣','扣%','成本','利潤','缺進價','備註'],
     O.map(o=>{const d=o.d||{},t=ded(o),b=o.sale+o.refund;return [o.date,o.paid,o.id,o.bline,o.items,o.sale,o.refund,d.commission??'',d.service??'',d.payfee??'',d.buyerShip??'',d.shipPaid??'',d.shipSub??'',d.returnShip??o.rs,d.other||'',o.payout,d.inv??'',t,b>0?Math.round(Math.abs(t)/b*1000)/10+'%':'',o.ok?o.cost:'',o.ok?o.profit:'',o.missing,o.flags.map(x=>x[0]).join('；')]}),
