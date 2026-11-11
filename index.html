@@ -90,7 +90,8 @@ table.orders{font-size:13px}
 table.orders th,table.orders td{padding:6px 6px}
 table.orders th{white-space:normal;line-height:1.3}
 table.orders td.items{min-width:150px;max-width:240px}
-table.orders .oid{font-size:12px;color:var(--muted)}
+table.orders .oid{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;white-space:nowrap}
+table.orders .oid .lbl{display:inline-block;min-width:28px;font-size:11px;color:var(--muted)}
 th.sort{cursor:pointer;user-select:none}
 .cpw{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 button.cp{padding:2px 4px;border-radius:5px;line-height:0;color:var(--muted);background:transparent}
@@ -139,6 +140,7 @@ h2{font-size:16px;margin:6px 0 0}
     <div class="filters" style="align-self:end">
       <button class="chip" data-q="today">今天</button><button class="chip" data-q="yday">昨天</button><button class="chip" data-q="2d">近 2 天</button><button class="chip" data-q="7d">近 7 天</button><button class="chip" data-q="month">本月到今天</button><button class="chip" data-q="last">上個月（月結）</button>
     </div>
+    <label class="field" id="hist-wrap" hidden>看已存的月結<select id="i-hist" style="font:inherit;font-size:15px;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink)"></select></label>
     <span id="cloud" class="help"></span>
   </div>
 
@@ -621,6 +623,7 @@ const fixedFor=v=>v&&v.isMonth===false?fixedTotal()*v.days/v.mdays:fixedTotal();
 const taxRate=()=>N(LS.get('taxRate',20))/100;
 const afterTax=net=>net>0?net*(1-taxRate()):net;
 let ovr=LS.get('costOverrides2',{});
+let deletedSlips=new Set(LS.get('deletedSlips',[])); // 3-1 invoices the user deleted in the system
 try{localStorage.removeItem('master')}catch(e){}
 try{const m=JSON.parse(localStorage.getItem('master2')||'null');if(m){st.master=m.map;st.masterAt=m.at}}catch(e){} // {商品編號:{cost,name,at}}
 const ovNums=()=>Object.fromEntries(Object.entries(ovr).map(([k,v])=>[k,v.cost]));
@@ -665,6 +668,7 @@ async function loadCloud(){
     const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key','')));
     const j=await r.json();if(!j.ok)throw new Error(j.error||'讀取失敗');
     st.cloud=j;
+    fillHist(j);
     if(j.fixed&&j.fixed.length){fixedItems=j.fixed.map(r=>[String(r[0]),N(r[1])]);LS.set('fixedItems',fixedItems)}
     if(j.overrides){ovr={};j.overrides.forEach(r=>{if(r[0]&&r[2]!=='')ovr[String(r[0])]={name:r[1],cost:N(r[2]),at:r[3]}});LS.set('costOverrides2',ovr)}
     $('#cloud').textContent=`Google Sheet：上次保留訂單 ${j.pendingOrders.length} 筆、出貨單 ${new Set(j.pendingLines.map(x=>x[0])).size} 張。`;
@@ -774,7 +778,7 @@ function inputs(){
   if(C)C.pendingLines.forEach(r=>{if(r[9]===M.key)return;const b=String(r[0]);if(!pend.has(b))pend.set(b,{since:r[9],lines:[]});
     pend.get(b).lines.push({bline:b,date:toDate(r[1]),prodno:String(r[2]),name:String(r[3]),spec:String(r[4]),qty:N(r[5]),price:N(r[6]),sum:N(r[7]),sourp:N(r[8])})});
   const cost=[];const have=new Set();
-  st.cost.forEach(l=>{if(doneS.has(l.bline))return;const p=pend.get(l.bline);cost.push({...l,sourp0:l.sourp,carried:!!p,since:p?p.since:''});have.add(l.bline)});
+  st.cost.forEach(l=>{if(doneS.has(l.bline)||deletedSlips.has(l.bline))return;const p=pend.get(l.bline);cost.push({...l,sourp0:l.sourp,carried:!!p,since:p?p.since:''});have.add(l.bline)});
   pend.forEach((p,b)=>{if(have.has(b)||doneS.has(b))return;p.lines.forEach(l=>cost.push({...l,sourp0:l.sourp,carried:true,since:p.since}))});
   return {orders,cost,M};
 }
@@ -843,6 +847,22 @@ function liveVM(){
     missing:r.missing.map(m=>({prodno:m.prodno,name:m.name,spec:m.spec,price:m.price,qty:m.qty})),
     fees:feeBreakdown(r.orders,N(LS.get('invfee',2)))};
 }
+function fillHist(j){
+  const ms=(j.log||[]).map(r=>r[0]).filter(Boolean).sort().reverse();
+  $('#hist-wrap').hidden=!ms.length;
+  $('#i-hist').innerHTML=`<option value="">${st.cost&&st.ord?'這次上傳的計算結果':'選一個月份'}</option>`+ms.map(m=>`<option value="${esc(m)}">${esc(m)} 月結</option>`).join('');
+}
+$('#i-hist').addEventListener('change',async()=>{
+  const m=$('#i-hist').value;
+  if(!m){if(st.ord&&st.cost){msg('');run()}return}
+  const url=LS.get('url',SHEET_URL);$('#cloud').textContent=`正在讀取 ${m} 的月結…`;
+  try{const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key',''))+'&snap='+encodeURIComponent(m));
+    const j=await r.json();if(!j.ok||!j.snapshot)throw new Error(j.error||'這個月份沒有存結果（舊版存的只有總數）');
+    st.vm=JSON.parse(j.snapshot);st.live=false;clearTimeout(st.autoT);st.tab='orders';
+    $('#result').hidden=false;msg(`正在看 <b>${esc(m)}</b> 的月結（${esc(st.vm.savedAt)} 存的）。只能看、不會改到資料；要回到這次上傳的計算，選最上面那一項。`);
+    $('#cloud').textContent='';render();
+  }catch(e){$('#cloud').textContent='讀不到 '+m+'：'+e.message}
+});
 function showSnapshot(){
   const snap=st.cloud&&st.cloud.snapshot;
   if(!snap){if(!st.live)$('#result').hidden=true;return}
@@ -932,19 +952,19 @@ function rOrders(){
     if(f==='loss'&&!(o.profit<0))return false;
     if(f==='check'&&!isCheck(o))return false;
     if(f==='carried'&&!o.carried)return false;
-    if(q&&!(o.id.toLowerCase().includes(q)||o.items.toLowerCase().includes(q)))return false;
+    if(q&&!(o.id.toLowerCase().includes(q)||String(o.bline||'').includes(q)||o.items.toLowerCase().includes(q)))return false;
     return true});
   const S=st.sort;
   if(S&&S.k&&!(['cost','profit'].includes(S.k)&&!st.show)){list=[...list].sort((a,b)=>{const x=sv(a,S.k),y=sv(b,S.k);if(x==null&&y==null)return 0;if(x==null)return 1;if(y==null)return -1;return S.dir*(x-y)})}
   const NEGK=['refund','commission','service','payfee','ship','inv','ded'];
   const arrow=k=>S&&S.k===k?((NEGK.includes(k)?S.dir>0:S.dir<0)?' ↓大':' ↑小'):'';
   $('#panel').innerHTML=`<div class="filters">${[['all','全部'],['loss','賠錢'],['carried','上次保留']].map(([k,n])=>`<button class="chip" aria-pressed="${f===k}" data-f="${k}">${n}</button>`).join('')}
-  <input class="search" id="q" type="search" placeholder="搜尋訂單編號、商品" value="${esc(st.q)}"></div>
+  <input class="search" id="q" type="search" placeholder="搜尋蝦皮或文菖單號、商品" value="${esc(st.q)}"></div>
   <p class="help">點欄位名稱可以排序：第一次由大到小（扣款是扣最多的排前面），再點一次反過來；點訂單看付款方式、運費細項和品項成本。</p>
-  <div class="tbl"><table class="orders"><thead><tr><th>日期／訂單</th><th>商品</th>${SORTS.map(([k,n])=>`<th class="r sort" data-s="${k}" title="點一下排序">${n}${arrow(k)}</th>`).join('')}</tr></thead><tbody>${
+  <div class="tbl"><table class="orders"><thead><tr><th>日期／訂單號碼</th><th>商品</th>${SORTS.map(([k,n])=>`<th class="r sort" data-s="${k}" title="點一下排序">${n}${arrow(k)}</th>`).join('')}</tr></thead><tbody>${
   list.map(o=>{const t=ded(o),b=o.sale+o.refund,op=st.open.has(o.id),d=o.d;
   return `<tr data-id="${esc(o.id)}" class="clk ${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}">
-  <td class="num">${op?'▾':'▸'} ${md2(o.date)}<div class="oid">${cp(o.id)}</div></td>
+  <td class="num">${op?'▾':'▸'} ${md2(o.date)}<div class="oid"><span class="lbl">蝦皮</span>${cp(o.id)}</div><div class="oid"><span class="lbl">文菖</span>${o.bline?cp(o.bline):'<span class="miss">沒有出貨單</span>'}</div></td>
   <td class="items">${esc(o.items)}${o.missing?`<div class="miss">缺進價：${esc(o.missing)}</div>`:''}${o.flags.length?`<div>${pills(o.flags)}</div>`:''}</td>
   <td class="r">${fm(o.sale)}</td><td class="r ${o.refund?'neg':''}">${o.refund?fm(o.refund):''}</td>
   ${d?[d.commission,d.service,d.payfee,d.buyerShip+d.shipSub+d.shipPaid+d.returnShip,d.inv].map(x=>`<td class="r ${x<0?'neg':''}">${x?fm(x):'0'}</td>`).join(''):`<td class="r" colspan="5">${fm(o.chg??o.fee)}<div class="help">上次保留</div></td>`}
@@ -966,7 +986,7 @@ function rPending(){
   <div id="miss-box"></div>
   <h2>② 蝦皮已取消、但 3-1 有開出貨單（${cancel.length}）</h2>
   <div class="tbl"><table><thead><tr><th>開單日</th><th>出貨單號</th><th class="r">金額</th><th>商品</th><th>要做的事</th></tr></thead><tbody>${
-  cancel.map(s=>`<tr class="unm"><td class="num">${md2(s.date)}</td><td>${cp(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td><td>${esc(s.why)}${s.cancelId?`<div>${cp(s.cancelId)}</div>`:''}</td></tr>`).join('')||'<tr><td colspan="5">沒有。</td></tr>'
+  cancel.map(s=>`<tr class="unm"><td class="num">${md2(s.date)}</td><td>${cp(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td><td>${esc(s.why)}${s.cancelId?`<div>${cp(s.cancelId)}</div>`:''}${st.live?`<div style="margin-top:6px"><button class="primary" data-deleted="${esc(s.bline)}">已刪除</button></div>`:''}</td></tr>`).join('')||'<tr><td colspan="5">沒有。</td></tr>'
   }</tbody></table></div>
   <h2>③ 沒對到出貨單的蝦皮訂單（${po.length}）</h2>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">實際入帳</th><th>原因</th><th>可能是這張</th><th></th></tr></thead><tbody>${
@@ -986,6 +1006,7 @@ function rPending(){
   next.map(s=>`<tr><td class="num">${md2(s.date)}</td><td>${cp(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}${s.since?`<div class="help">保留自 ${esc(s.since)}</div>`:''}</td></tr>`).join('')
   }</tbody></table></div></details>`;
   rMissing($('#miss-box'));
+  $('#panel').querySelectorAll('[data-deleted]').forEach(b=>b.onclick=()=>{deletedSlips.add(b.dataset.deleted);LS.set('deletedSlips',[...deletedSlips]);st.removed.add('s'+b.dataset.deleted);st.vm=liveVM();render();saveSoon()});
   $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);st.vm=liveVM();render();saveSoon()});
 }
 function rFixed(){
@@ -1046,6 +1067,7 @@ function payload(){
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
   const ps=r.unpaid.filter(s=>s.lv!=='drop'&&s.lv!=='cancel'&&!st.removed.has('s'+s.bline));
   const done=r.orders.filter(o=>o.slip||o.noSlipRefund).map(o=>[o.id,o.slip?o.slip.bline:'']);
+  r.unpaid.filter(s=>s.lv==='cancel'&&st.removed.has('s'+s.bline)).forEach(s=>done.push(['',s.bline])); // deleted in the system: never comes back
   const pendingOrders=po.map(o=>[o.id,ymd(o.date),ymd(o.paid),o.orig,o.promo,o.refund,o.returnShip,o.payout,o.since||M.key,o.why]);
   const pendingLines=[];ps.forEach(s=>s.lines.forEach(l=>pendingLines.push([s.bline,ymd(s.date),l.prodno,l.name,l.spec,l.qty,l.price,l.sum,l.sourp0??l.sourp,s.since||M.key,s.why])));
   const summary=[T.orders,Math.round(T.payout),Math.round(T.cost),Math.round(T.profit),fixedTotal(),Math.round(T.profit-fixedTotal()),T.carriedMatched,po.length,ps.length];
