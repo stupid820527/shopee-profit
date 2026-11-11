@@ -141,17 +141,17 @@ h2{font-size:16px;margin:6px 0 0}
   <section class="cards">
     <label class="card" id="c-inc"><input type="file" id="f-inc" accept=".xlsx,.xls">
       <span class="t">① 蝦皮進帳報表<span class="tag">選用</span></span>
-      <span class="range">抓取日期（錢包入帳日）：<b id="r-inc"></b></span>
+      <span class="range">建議抓取日期：<b id="r-inc"></b></span>
       <span class="h">可以不傳。不傳的話，用訂單報表裡的蝦皮手續費估算（幾乎一樣）；要跟實際撥款完全對上再傳。賣家中心 → 我的進帳 → 匯出</span>
       <span class="st" id="s-inc">尚未選擇</span></label>
     <label class="card" id="c-ord"><input type="file" id="f-ord" accept=".xlsx,.xls" multiple>
       <span class="t">② 蝦皮訂單報表<span class="tag req">必要</span></span>
-      <span class="range">抓取日期（訂單成立日，往前多抓 20 天）：<b id="r-ord"></b></span>
+      <span class="range">建議抓取日期：<b id="r-ord"></b></span>
       <span class="h">賣家中心 → 我的銷售 →「全部」→ 匯出。一次最多一個月，可以一次選兩個檔。</span>
       <span class="st" id="s-ord">尚未選擇</span></label>
     <label class="card" id="c-cost"><input type="file" id="f-cost" accept=".xlsx,.xls,.csv" multiple>
       <span class="t">③ 系統成本表<span class="tag req">必要</span></span>
-      <span class="range">抓取日期（開單日，往前多抓 30 天）：<b id="r-cost"></b></span>
+      <span class="range">建議抓取日期：<b id="r-cost"></b></span>
       <span class="h">系統匯出的銷貨明細（客戶蝦皮）。可以一次選多個檔。</span>
       <span class="st" id="s-cost">尚未選擇</span></label>
     <label class="card" id="c-mat"><input type="file" id="f-mat" accept=".xlsx,.xls">
@@ -169,7 +169,7 @@ h2{font-size:16px;margin:6px 0 0}
     <div class="kpis" id="kpis"></div>
     <div class="actions" style="margin-top:12px">
       <button id="b-eye" class="eye" aria-pressed="false"></button>
-      <button class="primary" id="b-save">儲存到 Google Sheet</button>
+      <button class="primary" id="b-save">存檔（月結）</button>
       <button id="b-xlsx">下載 Excel</button>
     </div>
     <nav class="tabs" id="tabs" style="margin-top:14px"></nav>
@@ -290,15 +290,19 @@ function parseOrderMeta(rows){
     const p=N(g(r,'商品活動價格'))||N(g(r,'商品原價'));
     o.act+=p*N(g(r,'數量'));o.ret+=p*N(g(r,'退貨數量'));
   }
+  for(const o of m.values()){ // brand-new orders may not show fees yet: use the normal rates
+    if(o.status!=='不成立'&&!/完成/.test(o.status)&&!o.ret&&!o.commission&&!o.service&&!o.payfee&&o.act>0){const r=parseFloat(o.rate)||2.5;
+      o.commission=-Math.round(o.act*0.06);o.service=-60;o.payfee=-Math.round(o.act*r/100);o.feeEst=true}}
   return [...m.values()];
 }
-function incomeFromOrders(meta,start,end){
-  return meta.filter(o=>o.status!=='不成立'&&o.done&&o.done>=start&&o.done<=end).map(o=>{
+function incomeFromOrders(meta,start,end,byCreated){
+  const inR=d=>d&&d>=start&&d<=end;
+  return meta.filter(o=>o.status!=='不成立'&&(byCreated?inR(o.date):inR(o.done))).map(o=>{
     const shipPaid=-(o.buyerShip+o.shipSub); // Shopee normally pays exactly what buyer + subsidy cover
     const payout=o.act-o.ret+o.commission+o.service+o.payfee+o.coupon+o.returnShip;
     return {id:o.id,date:o.date,paid:o.done,orig:o.act,promo:0,refund:-o.ret,returnShip:o.returnShip,payout:Math.round(payout),
       commission:o.commission,service:o.service,payfee:o.payfee,ams:0,coupon:o.coupon,method:o.method,rate:o.rate,
-      buyerShip:o.buyerShip,shipSub:o.shipSub,shipPaid,comp:0,est:true};
+      buyerShip:o.buyerShip,shipSub:o.shipSub,shipPaid,comp:0,est:true,status:o.status,feeEst:!!o.feeEst};
   });
 }
 function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=48000,target=0.07}){
@@ -620,10 +624,10 @@ function monthInfo(){
   const isMonth=start.getDate()===1&&end.getMonth()===start.getMonth()&&end.getFullYear()===start.getFullYear()&&new Date(end.getFullYear(),end.getMonth()+1,0).getDate()===end.getDate();
   const key=isMonth?`${start.getFullYear()}/${String(start.getMonth()+1).padStart(2,'0')}`:(+start===+end?ymd(start):`${ymd(start)}–${md(end)}`);
   const days=Math.round((end-start)/DAY)+1,mdays=new Date(start.getFullYear(),start.getMonth()+1,0).getDate();
-  return {key,start,end,isMonth,days,mdays,ordFrom:new Date(+start-20*DAY),costFrom:new Date(+start-30*DAY)};
+  return {key,start,end,isMonth,days,mdays,ordFrom:isMonth?new Date(start.getFullYear(),start.getMonth()-1,15):new Date(+start-20*DAY),costFrom:isMonth?new Date(start.getFullYear(),start.getMonth()-1,1):new Date(+start-30*DAY)};
 }
 function ranges(){const M=monthInfo();return {inc:[M.start,M.end],ord:[M.ordFrom,M.end],cost:[M.costFrom,M.end]}}
-function showRanges(){const R=ranges();for(const k of ['inc','ord','cost'])$('#r-'+k).textContent=`${ymd(R[k][0])} ～ ${ymd(R[k][1])}`}
+function showRanges(){const R=ranges(),M=monthInfo();for(const k of ['inc','ord','cost'])$('#r-'+k).textContent=M.isMonth?`${ymd(R[k][0])} ～ ${ymd(R[k][1])}`:'不限，有包含要看的日期就好'}
 showRanges();
 setTimeout(matStatus,0);
 
@@ -664,6 +668,7 @@ function rowsOf(wb,word){
 function span(dates){const v=dates.filter(Boolean).sort((a,b)=>a-b);return v.length?[v[0],v[v.length-1]]:null}
 function coverText(sp,want){
   if(!sp)return {t:'',ok:true};
+  if(!monthInfo().isMonth)return {t:`檔案日期 ${ymd(sp[0])} ～ ${ymd(sp[1])}`,ok:true};
   const ok=sp[0]<=want[0]&&sp[1]>=new Date(+want[1]-2*DAY);
   return {t:`檔案日期 ${ymd(sp[0])} ～ ${ymd(sp[1])}`+(ok?'':'\n⚠ 沒有涵蓋建議的日期'),ok};
 }
@@ -731,10 +736,11 @@ function inputs(){
   const doneO=new Set(),doneS=new Set();
   if(C)C.done.forEach(r=>{if(r[0]!==M.key){if(r[1])doneO.add(String(r[1]));if(r[2])doneS.add(String(r[2]))}});
   const inMonth=o=>!o.paid||(o.paid>=M.start&&o.paid<=M.end);
-  const src=st.inc?st.inc.orders:incomeFromOrders(st.ordMeta||[],M.start,M.end);
-  st.estimated=!st.inc;
-  st.outside=st.inc?src.filter(o=>!inMonth(o)).length:0;
-  const orders=src.filter(o=>inMonth(o)&&!doneO.has(o.id)).map(o=>({...o}));
+  const useInc=st.inc&&M.isMonth; // a few days' view always uses the order report: orders placed in those days
+  const src=useInc?st.inc.orders:incomeFromOrders(st.ordMeta||[],M.start,M.end,!M.isMonth);
+  st.estimated=!useInc;
+  st.outside=useInc?src.filter(o=>!inMonth(o)).length:0;
+  const orders=src.filter(o=>(M.isMonth?inMonth(o):true)&&!doneO.has(o.id)).map(o=>({...o}));
   const ids=new Set(orders.map(o=>o.id));
   if(C)C.pendingOrders.forEach(r=>{
     const id=String(r[0]);if(ids.has(id)||doneO.has(id)||r[8]===M.key)return;
@@ -762,13 +768,19 @@ function run(){
   if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
   st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
   const notes=[];
-  if(!M.isMonth)notes.push(`查看 ${M.key}（${M.days} 天）：只看這段期間有沒有賺錢，不存檔、不影響每月對帳。固定成本照天數分攤。`);
-  if(st.estimated)notes.push(`沒有上傳進帳報表：用訂單報表裡「${M.key} 完成」的訂單和蝦皮手續費來算，跟實際入帳通常只差幾元。要完全精準再上傳進帳報表。`);
+  if(!M.isMonth)notes.push(`查看 ${M.key}（${M.days} 天）<b>下單</b>的訂單：還沒完成的也算，金額用訂單報表裡的蝦皮手續費（剛下單還沒有手續費的，用 6%＋$60＋金流費率估）。不存檔、不影響每月對帳，固定成本照天數分攤。`);
+  else if(st.estimated)notes.push(`沒有上傳進帳報表：用訂單報表裡「${M.key} 完成」的訂單和蝦皮手續費來算，跟實際入帳通常只差幾元。要完全精準再上傳進帳報表。`);
   if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
   msg(notes.join('<br>'),notes.length?'warn':'');
   $('#result').hidden=false;render();
-  clearTimeout(st.autoT);st.autoT=setTimeout(()=>save(true),600);
+  st.coverOk=coverOk();
+  if(M.isMonth&&!st.coverOk)msg(($('#msg').innerHTML?$('#msg').innerHTML+'<br>':'')+'檔案日期沒有涵蓋整個月，這次<b>不會自動存檔</b>，避免蓋掉正確的月結紀錄。確定要存請按「存檔（月結）」。','warn');
+  clearTimeout(st.autoT);if(M.isMonth&&st.coverOk)st.autoT=setTimeout(()=>save(true),600);
 }
+function coverOk(){const R=ranges();
+  const ok=(sp,w)=>!sp||(sp[0]<=w[0]&&sp[1]>=new Date(+w[1]-2*DAY));
+  const M=monthInfo(),W=[M.start,M.end]; // must at least reach back to the 1st and up to month end
+  return ok(span(st.ordInfo||[]),W)&&ok(st.cost?span(st.cost.map(l=>l.date)):null,W)&&(!st.inc||ok([st.inc.start,st.inc.end],R.inc));}
 
 function feeBreakdown(ords,invFee){
   const o=ords.filter(x=>!x.carried);const S=k=>o.reduce((s,x)=>s+(x[k]||0),0);
@@ -997,16 +1009,16 @@ function payload(){
   return {key:LS.get('key',''),month:M.key,done,pendingOrders,pendingLines,summary,snapshot:JSON.stringify(snap)};
 }
 async function save(auto){
-  if(!st.live)return;
+  if(!st.live)return;const M0=st.M;
   if(!st.M.isMonth){$('#cloud').textContent='這是查看幾天的結果，不會存到 Google Sheet，也不影響每月對帳。整個月對帳時才會存檔。';return}
   const url=LS.get('url',SHEET_URL);if(!url){if(!auto){$('#settings').open=true;msg('請先在設定填 Google Sheet 連結。','warn')}return}
   const b=$('#b-save');b.disabled=true;b.textContent='儲存中…';
   try{
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload())});
     const j=await r.json();if(!j.ok)throw new Error(j.error||'儲存失敗');
-    $('#cloud').textContent=`已存到 Google Sheet（${st.M.key}）。其他電腦打開會看到這次的結果，${st.vm.ps.filter(s=>s.lv!=='warn').length} 張下月撥款的銷貨單已轉到下月對帳。`;
-  }catch(e){msg('存到 Google Sheet 失敗：'+esc(e.message)+'（可以按「重新儲存」再試）','err')}
-  b.disabled=false;b.textContent='重新儲存';
+    $('#cloud').textContent=`已存到 Google Sheet（${M0.key}）。其他電腦打開會看到這次的結果，${st.vm.ps.filter(s=>s.lv!=='warn').length} 張下月撥款的銷貨單已轉到下月對帳。`;
+  }catch(e){msg('存到 Google Sheet 失敗：'+esc(e.message)+'（可以按「存檔（月結）」再試）','err')}
+  b.disabled=false;b.textContent='存檔（月結）';
 }
 $('#b-save').onclick=()=>save(false);
 $('#b-eye').onclick=()=>{st.show=!st.show;render()};
