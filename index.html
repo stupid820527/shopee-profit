@@ -111,6 +111,9 @@ table.mini tr.sub td:first-child{padding-left:26px;color:var(--muted)}
 table.mini tr.tot td{font-weight:700;border-top:2px solid var(--line)}
 h2{font-size:16px;margin:6px 0 0}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
+.modes{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:max-content;max-width:100%}
+.mode{border:none;border-radius:0;padding:9px 16px;font-weight:700;color:var(--muted);background:var(--panel)}
+.mode[aria-selected="true"]{background:var(--accent);color:var(--accent-ink)}
 .eye{display:inline-flex;align-items:center;gap:6px}
 .eye[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 @media (max-width:600px){h1{font-size:20px}.kpi .v{font-size:18px}}
@@ -134,12 +137,21 @@ h2{font-size:16px;margin:6px 0 0}
     <p class="help" style="margin-top:8px">這些設定只記在這台電腦的瀏覽器，不會放上網。</p>
   </details>
 
+  <div class="modes" role="tablist" aria-label="模式">
+    <button class="mode" data-mode="view">查看利潤（任意日期）</button>
+    <button class="mode" data-mode="recon">月結對帳</button>
+  </div>
   <div class="row">
+    <span id="view-ctl" style="display:contents">
     <label class="field">從<input id="i-from" type="date"></label>
     <label class="field">到<input id="i-to" type="date"></label>
     <div class="filters" style="align-self:end">
-      <button class="chip" data-q="today">今天</button><button class="chip" data-q="yday">昨天</button><button class="chip" data-q="2d">近 2 天</button><button class="chip" data-q="7d">近 7 天</button><button class="chip" data-q="month">本月到今天</button><button class="chip" data-q="last">上個月（月結）</button>
+      <button class="chip" data-q="today">今天</button><button class="chip" data-q="yday">昨天</button><button class="chip" data-q="2d">近 2 天</button><button class="chip" data-q="7d">近 7 天</button><button class="chip" data-q="month">本月到今天</button><button class="chip" data-q="lastm">上個月</button>
     </div>
+    </span>
+    <span id="recon-ctl" style="display:contents">
+    <label class="field">對帳月份（蝦皮撥款的月份）<input id="i-month" type="month"></label>
+    </span>
     <label class="field" id="hist-wrap" hidden>看已存的月結<select id="i-hist" style="font:inherit;font-size:15px;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--ink)"></select></label>
     <span id="cloud" class="help"></span>
   </div>
@@ -635,22 +647,33 @@ const SHEET_URL='https://script.google.com/macros/s/AKfycbxEQ4CodEnrbQJ4MhtGHNrR
 });
 if(!LS.get('pw',''))$('#settings').open=true;
 const dIn=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+let mode=LS.get('mode','view'); // view = any dates, just profit; recon = month-end reconciliation with carry-over
+function setMode(m){mode=m;LS.set('mode',m);
+  document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-selected',b.dataset.mode===m));
+  $('#view-ctl').hidden=m!=='view';$('#recon-ctl').hidden=m!=='recon';$('#view-ctl').style.display=m==='view'?'contents':'none';$('#recon-ctl').style.display=m==='recon'?'contents':'none';
+  showRanges();checkCover();run()}
+document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
 function setRange(a,b){$('#i-from').value=dIn(a);$('#i-to').value=dIn(b);LS.set('range',[dIn(a),dIn(b)]);showRanges();checkCover();run()}
 (function(){const t=new Date();const r=LS.get('range',null);
-  if(r){$('#i-from').value=r[0];$('#i-to').value=r[1]}else{const a=new Date(t.getFullYear(),t.getMonth()-1,1),b=new Date(t.getFullYear(),t.getMonth(),0);$('#i-from').value=dIn(a);$('#i-to').value=dIn(b)}})();
+  if(r){$('#i-from').value=r[0];$('#i-to').value=r[1]}else{const T=dIn(t);$('#i-from').value=T;$('#i-to').value=T}
+  const p=new Date(t.getFullYear(),t.getMonth()-1,1);$('#i-month').value=LS.get('month',`${p.getFullYear()}-${String(p.getMonth()+1).padStart(2,'0')}`)})();
 ['#i-from','#i-to'].forEach(id=>$(id).addEventListener('change',()=>{LS.set('range',[$('#i-from').value,$('#i-to').value]);showRanges();checkCover();run()}));
+$('#i-month').addEventListener('change',()=>{LS.set('month',$('#i-month').value);showRanges();checkCover();run()});
 document.querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>{const t=new Date(),T=new Date(t.getFullYear(),t.getMonth(),t.getDate()),q=b.dataset.q;
   if(q==='today')setRange(T,T);else if(q==='yday'){const y=new Date(+T-DAY);setRange(y,y)}
   else if(q==='2d')setRange(new Date(+T-DAY),T);else if(q==='7d')setRange(new Date(+T-6*DAY),T);
   else if(q==='month')setRange(new Date(T.getFullYear(),T.getMonth(),1),T);
-  else if(q==='last')setRange(new Date(T.getFullYear(),T.getMonth()-1,1),new Date(T.getFullYear(),T.getMonth(),0))});
+  else if(q==='lastm')setRange(new Date(T.getFullYear(),T.getMonth()-1,1),new Date(T.getFullYear(),T.getMonth(),0))});
 function monthInfo(){
+  if(mode==='recon'){
+    const [y,m]=($('#i-month').value||'').split('-').map(Number);const start=new Date(y,m-1,1),end=new Date(y,m,0);
+    return {key:`${y}/${String(m).padStart(2,'0')}`,start,end,isMonth:true,days:end.getDate(),mdays:end.getDate(),ordFrom:new Date(y,m-2,15),costFrom:new Date(y,m-2,1)};
+  }
   const a=toDate($('#i-from').value),b=toDate($('#i-to').value)||a;
   const start=a&&b&&a>b?b:a,end=a&&b&&a>b?a:b;
-  const isMonth=start.getDate()===1&&end.getMonth()===start.getMonth()&&end.getFullYear()===start.getFullYear()&&new Date(end.getFullYear(),end.getMonth()+1,0).getDate()===end.getDate();
-  const key=isMonth?`${start.getFullYear()}/${String(start.getMonth()+1).padStart(2,'0')}`:(+start===+end?ymd(start):`${ymd(start)}–${md(end)}`);
+  const key=+start===+end?ymd(start):`${ymd(start)}–${md(end)}`;
   const days=Math.round((end-start)/DAY)+1,mdays=new Date(start.getFullYear(),start.getMonth()+1,0).getDate();
-  return {key,start,end,isMonth,days,mdays,ordFrom:isMonth?new Date(start.getFullYear(),start.getMonth()-1,15):new Date(+start-20*DAY),costFrom:isMonth?new Date(start.getFullYear(),start.getMonth()-1,1):new Date(+start-30*DAY)};
+  return {key,start,end,isMonth:false,days,mdays,ordFrom:new Date(+start-20*DAY),costFrom:new Date(+start-30*DAY)};
 }
 function ranges(){const M=monthInfo();return {inc:[M.start,M.end],ord:[M.ordFrom,M.end],cost:[M.costFrom,M.end]}}
 function showRanges(){const R=ranges(),M=monthInfo();for(const k of ['inc','ord','cost'])$('#r-'+k).textContent=M.isMonth?`${ymd(R[k][0])} ～ ${ymd(R[k][1])}`:'不限，有包含要看的日期就好'}
@@ -1121,6 +1144,7 @@ $('#b-xlsx').onclick=()=>{
   XLSX.utils.book_append_sheet(wb,styledSheet(['商品編號','品名','規格','售價','數量'],v.missing.map(m=>[m.prodno,m.name,m.spec,m.price,m.qty]),null,[3],[18,30,22,9,8]),'缺進價');
   XLSX.writeFile(wb,`蝦皮利潤對帳_${v.month.replace('/','')}.xlsx`);
 };
+setMode(mode);
 loadCloud();
 </script>
 </body>
