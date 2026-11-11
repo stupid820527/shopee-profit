@@ -136,9 +136,9 @@ h2{font-size:16px;margin:6px 0 0}
 
   <section class="cards">
     <label class="card" id="c-inc"><input type="file" id="f-inc" accept=".xlsx,.xls">
-      <span class="t">① 蝦皮進帳報表<span class="tag req">必要</span></span>
+      <span class="t">① 蝦皮進帳報表<span class="tag">選用</span></span>
       <span class="range">抓取日期（錢包入帳日）：<b id="r-inc"></b></span>
-      <span class="h">賣家中心 → 我的進帳 → 匯出</span>
+      <span class="h">可以不傳。不傳的話，用訂單報表裡的蝦皮手續費估算（幾乎一樣）；要跟實際撥款完全對上再傳。賣家中心 → 我的進帳 → 匯出</span>
       <span class="st" id="s-inc">尚未選擇</span></label>
     <label class="card" id="c-ord"><input type="file" id="f-ord" accept=".xlsx,.xls" multiple>
       <span class="t">② 蝦皮訂單報表<span class="tag req">必要</span></span>
@@ -267,6 +267,35 @@ function sameContent(slip,items){
     if(bi<0)return false;used.add(bi);
   }
   return true;
+}
+
+// when there is no income report: build the same order records from the Shopee order report (fees are listed there too)
+function parseOrderMeta(rows){
+  const hi=rows.findIndex(r=>r&&r.includes('訂單編號')&&r.includes('商品名稱'));if(hi<0)return [];
+  const h=rows[hi],g=(r,k)=>{const i=h.indexOf(k);return i<0?null:r[i]};
+  const m=new Map();
+  for(const r of rows.slice(hi+1)){
+    const id=g(r,'訂單編號');if(!id)continue;
+    let o=m.get(String(id));
+    if(!o){o={id:String(id),status:String(g(r,'訂單狀態')||''),date:toDate(String(g(r,'訂單成立日期')||'').slice(0,10)),
+      done:toDate(String(g(r,'訂單完成時間')||'').slice(0,10)),act:0,ret:0,
+      commission:-N(g(r,'成交手續費')),service:-N(g(r,'其他服務費')),payfee:-N(g(r,'金流與系統處理費')),
+      buyerShip:N(g(r,'買家支付運費')),shipSub:N(g(r,'蝦皮補助運費')),returnShip:-Math.abs(N(g(r,'退貨運費'))),
+      coupon:-N(g(r,'賣家負擔優惠券'))-N(g(r,'賣家負擔蝦幣回饋券')),
+      method:String(g(r,'付款方式')||'其他'),rate:String(g(r,'金流與系統處理費率')||'')};m.set(o.id,o)}
+    const p=N(g(r,'商品活動價格'))||N(g(r,'商品原價'));
+    o.act+=p*N(g(r,'數量'));o.ret+=p*N(g(r,'退貨數量'));
+  }
+  return [...m.values()];
+}
+function incomeFromOrders(meta,start,end){
+  return meta.filter(o=>o.status!=='不成立'&&o.done&&o.done>=start&&o.done<=end).map(o=>{
+    const shipPaid=-(o.buyerShip+o.shipSub); // Shopee normally pays exactly what buyer + subsidy cover
+    const payout=o.act-o.ret+o.commission+o.service+o.payfee+o.coupon+o.returnShip;
+    return {id:o.id,date:o.date,paid:o.done,orig:o.act,promo:0,refund:-o.ret,returnShip:o.returnShip,payout:Math.round(payout),
+      commission:o.commission,service:o.service,payfee:o.payfee,ams:0,coupon:o.coupon,method:o.method,rate:o.rate,
+      buyerShip:o.buyerShip,shipSub:o.shipSub,shipPaid,comp:0,est:true};
+  });
 }
 function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=48000,target=0.07}){
   const lines=cost.map(l=>{
@@ -647,15 +676,16 @@ bind('inc',async files=>{
   if(!r)throw new Error('這不是蝦皮進帳報表');st.inc=parseIncomeRows(r);
 });
 bind('ord',async files=>{
-  const map={},dates=[];
+  const map={},dates=[],meta=new Map();
   for(const f of files){
     const wb=await openBook(f,LS.get('pw',''));const r=rowsOf(wb,'商品名稱');
     if(!r)throw new Error(`「${f.name}」不是蝦皮訂單報表`);
     const m=parseOrderRows(r);for(const id in m)if(!map[id])map[id]=m[id];
+    parseOrderMeta(r).forEach(o=>{if(!meta.has(o.id))meta.set(o.id,o)});
     const h=r.findIndex(x=>x&&x.includes('訂單成立日期'));const i=r[h].indexOf('訂單成立日期');
     r.slice(h+1).forEach(x=>{if(x&&x[i])dates.push(toDate(String(x[i]).slice(0,10)))});
   }
-  st.ord=map;st.ordInfo=dates;
+  st.ord=map;st.ordInfo=dates;st.ordMeta=[...meta.values()];
 });
 bind('mat',async files=>{
   const wb=await openBook(files[0],'');const r=rowsOf(wb,'NUMBER');
@@ -685,8 +715,10 @@ function inputs(){
   const doneO=new Set(),doneS=new Set();
   if(C)C.done.forEach(r=>{if(r[0]!==M.key){if(r[1])doneO.add(String(r[1]));if(r[2])doneS.add(String(r[2]))}});
   const inMonth=o=>!o.paid||(o.paid>=M.start&&o.paid<=M.end);
-  st.outside=st.inc.orders.filter(o=>!inMonth(o)).length;
-  const orders=st.inc.orders.filter(o=>inMonth(o)&&!doneO.has(o.id)).map(o=>({...o}));
+  const src=st.inc?st.inc.orders:incomeFromOrders(st.ordMeta||[],M.start,M.end);
+  st.estimated=!st.inc;
+  st.outside=st.inc?src.filter(o=>!inMonth(o)).length:0;
+  const orders=src.filter(o=>inMonth(o)&&!doneO.has(o.id)).map(o=>({...o}));
   const ids=new Set(orders.map(o=>o.id));
   if(C)C.pendingOrders.forEach(r=>{
     const id=String(r[0]);if(ids.has(id)||doneO.has(id)||r[8]===M.key)return;
@@ -702,8 +734,8 @@ function inputs(){
 }
 
 function run(){
-  if(!(st.inc&&st.ord&&st.cost)){
-    if(st.inc||st.ord||st.cost){const miss=[!st.inc&&'進帳報表',!st.ord&&'訂單報表',!st.cost&&'成本表'].filter(Boolean);msg('還差：'+miss.join('、'))}
+  if(!(st.ord&&st.cost)){
+    if(st.inc||st.ord||st.cost){const miss=[!st.ord&&'訂單報表',!st.cost&&'成本表'].filter(Boolean);msg('還差：'+miss.join('、'))}
     showSnapshot();return;
   }
   const {orders,cost,M}=inputs();
@@ -714,6 +746,7 @@ function run(){
   if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
   st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
   const notes=[];
+  if(st.estimated)notes.push(`沒有上傳進帳報表：用訂單報表裡「${M.key} 完成」的訂單和蝦皮手續費來算，跟實際入帳通常只差幾元。要完全精準再上傳進帳報表。`);
   if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
   msg(notes.join('<br>'),notes.length?'warn':'');
   $('#result').hidden=false;render();
@@ -742,7 +775,7 @@ function liveVM(){
   const r=st.res,M=st.M,T=r.T;
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
   const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
-  return {month:M.key,savedAt:'',fixed:st.fixed,
+  return {month:M.key,savedAt:'',fixed:st.fixed,estimated:!!st.estimated,
     T:{orders:T.orders,payout:T.payout,fee:T.fee+T.returnShip-T.invoice,cost:T.cost,profit:T.profit,net:T.net,carriedMatched:T.carriedMatched,missingOrders:T.missingOrders},
     orders:r.orders.map(o=>{const ok=!!(o.slip||o.noSlipRefund);return {date:ymd(o.date),paid:ymd(o.paid),id:o.id,bline:o.slip?o.slip.bline:'',
       items:o.slip?o.slip.items:o.noSlipRefund?'（全額退貨）':'（沒對到銷貨單）',sale:o.sale,refund:o.refund,fee:o.fee,rs:o.returnShip,payout:o.payout,
@@ -774,7 +807,7 @@ const md2=s=>s?String(s).slice(5).replace(/^0/,'').replace('/0','/'):'';
 function render(){
   const v=st.vm,T=v.T;
   $('#kpis').innerHTML=[
-    [`${v.month} 實際入帳`,fm(T.payout),`${T.orders} 張訂單`],
+    [`${v.month} ${v.estimated?'預估入帳':'實際入帳'}`,fm(T.payout),`${T.orders} 張訂單${v.estimated?'（用訂單報表估算）':''}`],
     ['蝦皮總共扣',fm(Math.abs(T.fee)),v.fees&&v.fees.base?`佔營業額 ${pc(Math.abs(v.fees.total)/v.fees.base)}`:''],
     ['成本',hide(T.cost),'對到的訂單'],
     ['利潤',hide(T.profit),T.missingOrders?`還有 ${T.missingOrders} 筆缺進價`:T.carriedMatched?`含補對上次保留 ${T.carriedMatched} 筆`:'扣完蝦皮費用'],
