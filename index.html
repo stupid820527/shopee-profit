@@ -93,7 +93,7 @@ table.orders td.items{min-width:150px;max-width:240px}
 table.orders .oid{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;white-space:nowrap}
 table.orders .oid .lbl{display:inline-block;min-width:28px;font-size:11px;color:var(--muted)}
 th.sort{cursor:pointer;user-select:none}
-button.mini-edit{font-size:12px;padding:2px 10px;margin-top:4px;border-color:var(--accent);color:var(--accent)}
+button.mini-edit{font-size:13px;padding:3px 12px;margin-top:4px;background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
 .cpw{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 button.cp{padding:2px 4px;border-radius:5px;line-height:0;color:var(--muted);background:transparent}
 button.cp:hover{color:var(--accent);border-color:var(--accent)}
@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳</h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/12-B</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -1086,7 +1086,7 @@ function rOrders(){
   const arrow=k=>S&&S.k===k?((NEGK.includes(k)?S.dir>0:S.dir<0)?' ↓大':' ↑小'):'';
   $('#panel').innerHTML=`<div class="filters">${[['all','全部'],['loss','賠錢'],['ret','退貨'],['carried','上次保留']].map(([k,n])=>`<button class="chip" aria-pressed="${f===k}" data-f="${k}">${n}</button>`).join('')}
   <input class="search" id="q" type="search" placeholder="搜尋蝦皮或文菖單號、商品" value="${esc(st.q)}"></div>
-  <p class="help">點欄位名稱可以排序：第一次由大到小（扣款是扣最多的排前面），再點一次反過來；點訂單看付款方式、運費細項和品項成本。</p>
+  <p class="help">有問題的訂單，按單號下面的藍色「修改」就能直接改，改完按「儲存修改」會自動存檔。點欄位名稱可以排序：第一次由大到小（扣款是扣最多的排前面），再點一次反過來；點訂單看付款方式、運費細項和品項成本。</p>
   <div class="tbl"><table class="orders"><thead><tr><th>日期／訂單號碼</th><th>商品</th>${SORTS.map(([k,n])=>`<th class="r sort" data-s="${k}" title="點一下排序">${n}${arrow(k)}</th>`).join('')}</tr></thead><tbody>${
   list.map(o=>{const t=ded(o),b=o.sale+o.refund,op=st.open.has(o.id),d=o.d;
   return `<tr data-id="${esc(o.id)}" class="clk ${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}">
