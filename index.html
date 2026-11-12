@@ -93,6 +93,7 @@ table.orders td.items{min-width:150px;max-width:240px}
 table.orders .oid{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:4px;white-space:nowrap}
 table.orders .oid .lbl{display:inline-block;min-width:28px;font-size:11px;color:var(--muted)}
 th.sort{cursor:pointer;user-select:none}
+button.mini-edit{font-size:12px;padding:2px 10px;margin-top:4px;border-color:var(--accent);color:var(--accent)}
 .cpw{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 button.cp{padding:2px 4px;border-radius:5px;line-height:0;color:var(--muted);background:transparent}
 button.cp:hover{color:var(--accent);border-color:var(--accent)}
@@ -108,6 +109,16 @@ tr.detrow>td{background:var(--soft);padding:10px 12px}
 table.mini{width:auto;min-width:300px;max-width:420px;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:13px}
 table.mini td,table.mini th{padding:4px 10px;border-top:1px solid var(--line);position:static}
 table.mini tr.sub td:first-child{padding-left:26px;color:var(--muted)}
+tr.retl td{background:var(--warn-bg)}
+.editbox{background:var(--panel);border:2px solid var(--accent);border-radius:10px;padding:12px;max-width:100%}
+.editbox h3{font-size:14px;margin:0 0 8px}
+.efgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px}
+.ef{display:grid;gap:2px;font-size:12px;color:var(--muted)}
+.ef input,table.edit input{font:inherit;font-size:14px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);width:100%;min-width:0}
+table.mini.edit{width:100%;max-width:none}
+table.edit input.sm{width:90px}
+table.edit input:not(.sm){min-width:200px}
+table.edit th{white-space:nowrap}
 table.mini tr.tot td{font-weight:700;border-top:2px solid var(--line)}
 h2{font-size:16px;margin:6px 0 0}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
@@ -407,8 +418,17 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
     
     if(o.slip&&o.refund!==0&&o.rev>0&&(o.keptMatch||Math.abs(o.slip.total-o.rev)<1)){o.keep=1;o.slipNet=true} // invoice already shows only the kept items
     if(o.slip){
-      o.cost=Math.round(o.slip.cost*o.keep);
-      if(o.refund!==0)o.flags.push(o.rev<=0?['全額退貨，成本不計','info']:o.slipNet?['部分退款（出貨單已扣退貨）','info']:['部分退款，成本照比例扣','warn']);
+      // partial return: take exactly the returned items off this invoice (using 退貨數量 from the order report)
+      const its=orderItems&&orderItems[o.id];
+      if(o.refund!==0&&o.rev>0&&!o.slipNet&&its&&its.some(i=>i.ret>0)){
+        const q=o.slip.lines.map(l=>l.qty);
+        for(const it of its.filter(i=>i.ret>0)){let left=it.ret;
+          while(left>0){let bi=-1,bv=-1;o.slip.lines.forEach((l,i)=>{if(q[i]<=0)return;const v=itemLine(it,l);if(v>bv){bv=v;bi=i}});if(bi<0)break;
+            const r=Math.min(left,q[bi]);q[bi]-=r;left-=r;}}
+        o.lineQty=q;o.keep=1;o.itemRet=true;
+        o.cost=Math.round(o.slip.lines.reduce((s,l,i)=>s+(l.qty?l.cost*q[i]/l.qty:0),0));
+      }else o.cost=Math.round(o.slip.cost*o.keep);
+      if(o.refund!==0)o.flags.push(o.rev<=0?['全額退貨，成本不計','info']:o.slipNet?['部分退款（出貨單已扣退貨）','info']:o.itemRet?['部分退貨，退回的品項成本不計','info']:['部分退款，成本照比例扣','warn']);
       o.profit=Math.round((o.payout-(o.carried?0:invFee))/TAX-o.cost);
       o.missing=o.keep>0?o.slip.missing:[];
       if(o.byContent)o.flags.push([`金額不同（系統 ${o.slip.total}），依品項配對`,'info']);
@@ -423,7 +443,8 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
         const share=o.slip.total?l.sum/o.slip.total:0;
         let p=prod.get(l.prodno);
         if(!p){p={prodno:l.prodno,name:l.name,spec:l.spec,qty:0,sales:0,cost:0,fee:0,bad:false};prod.set(l.prodno,p)}
-        p.qty+=l.qty*o.keep;p.sales+=l.sum*o.keep;p.cost+=l.cost*o.keep;p.fee+=-(o.payout-o.rev)*share/TAX;p.bad=p.bad||l.bad;
+        const kf=o.lineQty?(l.qty?o.lineQty[o.slip.lines.indexOf(l)]/l.qty:0):o.keep;
+        p.qty+=l.qty*kf;p.sales+=l.sum*kf;p.cost+=l.cost*kf;p.fee+=-(o.payout-o.rev)*share/TAX;p.bad=p.bad||l.bad;
       }
     }else if(o.rev<=0){o.flags.push(['全額退貨，成本不計','info']);o.cost=0;o.profit=Math.round((o.payout-invFee)/TAX);o.noSlipRefund=true;o.missing=[]}
     else{o.flags.unshift(['對不起來','bad'])}
@@ -635,6 +656,7 @@ const fixedFor=v=>v&&v.isMonth===false?fixedTotal()*v.days/v.mdays:fixedTotal();
 const taxRate=()=>N(LS.get('taxRate',20))/100;
 const afterTax=net=>net>0?net*(1-taxRate()):net;
 let ovr=LS.get('costOverrides2',{});
+let edits=LS.get('edits',{}); // hand-made corrections per Shopee order: {id:{sale,refund,d,lines,note}}
 let confirmed=new Set(LS.get('confirmed',[])); // ④ orders the user already checked
 let deletedSlips=new Set(LS.get('deletedSlips',[])); // 3-1 invoices the user deleted in the system
 try{localStorage.removeItem('master')}catch(e){}
@@ -692,6 +714,7 @@ async function loadCloud(){
     const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key','')));
     const j=await r.json();if(!j.ok)throw new Error(j.error||'讀取失敗');
     st.cloud=j;
+    if(j.edits){edits={};j.edits.forEach(r=>{try{edits[String(r[0])]=JSON.parse(r[1])}catch(e){}});LS.set('edits',edits)}
     fillHist(j);
     if(j.fixed&&j.fixed.length){fixedItems=j.fixed.map(r=>[String(r[0]),N(r[1])]);LS.set('fixedItems',fixedItems)}
     if(j.overrides){ovr={};j.overrides.forEach(r=>{if(r[0]&&r[2]!=='')ovr[String(r[0])]={name:r[1],cost:N(r[2]),at:r[3]}});LS.set('costOverrides2',ovr)}
@@ -852,7 +875,8 @@ function feeBreakdown(ords,invFee){
   return {base,total:total+inv,rows,pay,ship,orders:o.length};
 }
 // one shape for both a fresh calculation and a result loaded from Google Sheet
-function liveVM(){
+function liveVM(){const v=liveVM0();applyEdits(v);vmRecalc(v);return v}
+function liveVM0(){
   const r=st.res,M=st.M,T=r.T;
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
   const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
@@ -863,7 +887,8 @@ function liveVM(){
       ship:('shipPaid' in o)?(o.buyerShip+o.shipSub+o.shipPaid+o.returnShip):o.returnShip,
       method:o.method||'',rate:o.rate||'',
       d:('shipPaid' in o)?{commission:o.commission,service:o.service,payfee:o.payfee,other:o.ams+o.coupon+o.comp,buyerShip:o.buyerShip,shipSub:o.shipSub,shipPaid:o.shipPaid,returnShip:o.returnShip,inv:o.carried?0:-N(LS.get('invfee',2))}:null,
-      lines:o.slip?o.slip.lines.map(l=>[l.name,Math.round(l.qty*o.keep*100)/100,Math.round(l.sum*o.keep),Math.round(l.cost*o.keep)]):[],
+      lines:o.slip?o.slip.lines.map((l,i)=>{const kf=o.lineQty?(l.qty?o.lineQty[i]/l.qty:0):o.keep;return [l.name,Math.round(l.qty*kf*100)/100,Math.round(l.sum*kf),Math.round(l.cost*kf),l.spec||'',l.prodno||'',Math.round((l.qty-l.qty*kf)*100)/100]}):[],
+      shp:((st.ord&&st.ord[o.id])||[]).map(i=>[i.name,i.qty,i.price,i.ret||0]),
       chg:o.payout-o.rev-(('shipPaid' in o)?(o.buyerShip+o.shipSub+o.shipPaid+o.returnShip):o.returnShip),
       cost:ok?o.cost:null,profit:ok?o.profit:null,missing:(o.missing||[]).join('、'),flags:o.flags,confirmed:confirmed.has(o.id),carried:!!o.carried,ok}}),
     po:po.map(o=>({date:ymd(o.date),id:o.id,payout:o.payout,why:o.why,since:o.since||'',cand:o.cand.map(s=>`${s.bline}（${md(s.date)}・${fm(s.total)}）${s.items}`)})),
@@ -882,8 +907,8 @@ $('#i-hist').addEventListener('change',async()=>{
   const url=LS.get('url',SHEET_URL);$('#cloud').textContent=`正在讀取 ${m} 的月結…`;
   try{const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key',''))+'&snap='+encodeURIComponent(m));
     const j=await r.json();if(!j.ok||!j.snapshot)throw new Error(j.error||'這個月份沒有存結果（舊版存的只有總數）');
-    st.vm=JSON.parse(j.snapshot);st.live=false;clearTimeout(st.autoT);st.tab='orders';
-    $('#result').hidden=false;msg(`正在看 <b>${esc(m)}</b> 的月結（${esc(st.vm.savedAt)} 存的）。只能看、不會改到資料；要回到這次上傳的計算，選最上面那一項。`);
+    st.vm=JSON.parse(j.snapshot);st.live=false;st.editing=null;clearTimeout(st.autoT);st.tab='orders';
+    $('#result').hidden=false;msg(`正在看 <b>${esc(m)}</b> 的月結（${esc(st.vm.savedAt)} 存的）。點訂單可以「修改這筆」，改完會更新這個月在 Google Sheet 的紀錄。要回到這次上傳的計算，選最上面那一項。`);
     $('#cloud').textContent='';render();
   }catch(e){$('#cloud').textContent='讀不到 '+m+'：'+e.message}
 });
@@ -951,6 +976,72 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-cp]'
 const pills=fl=>fl.map(([t,l])=>`<span class="pill p-${l}">${esc(t)}</span>`).join('');
 const isCheck=o=>o.flags.some(x=>x[1]==='warn'||x[1]==='bad');
 const ded=o=>o.payout-(o.sale+o.refund)+(o.d?o.d.inv:0); // everything Shopee kept (fees + shipping + invoice)
+// ---- hand edits: recompute an order and the month totals from the shown numbers ----
+function applyEdits(v){v.orders.forEach(o=>{const e=edits[o.id];if(!e)return;
+  Object.assign(o,{sale:e.sale,refund:e.refund,d:e.d,lines:e.lines,note:e.note||'',edited:true,ok:true});
+  if(e.lines.length)o.items=e.lines.map(l=>`${l[0]}×${l[1]}`).join('、');
+  if(!o.flags.some(x=>x[0]==='已手動修改'))o.flags=[...o.flags.filter(x=>x[0]!=='對不起來'),['已手動修改','good']];})}
+function orderCalc(o){const d=o.d;if(!d)return;
+  o.payout=Math.round(o.sale+o.refund+d.commission+d.service+d.payfee+(d.other||0)+d.buyerShip+d.shipSub+d.shipPaid+d.returnShip);
+  o.ship=d.buyerShip+d.shipSub+d.shipPaid+d.returnShip;o.chg=d.commission+d.service+d.payfee+(d.other||0);o.rs=d.returnShip;
+  if(o.ok){o.cost=Math.round(o.lines.reduce((s,l)=>s+N(l[3]),0));o.profit=Math.round((o.payout+(d.inv||0))/TAX-o.cost)}}
+function vmRecalc(v){
+  v.orders.forEach(o=>{if(o.edited)orderCalc(o)});
+  const own=v.orders.filter(o=>!o.carried),ok=v.orders.filter(o=>o.ok);
+  const T=v.T;T.payout=own.reduce((s,o)=>s+o.payout,0);
+  T.fee=own.reduce((s,o)=>s+o.payout-(o.sale+o.refund)+((o.d&&o.d.inv)||0),0);
+  T.cost=ok.reduce((s,o)=>s+(o.cost||0),0);T.profit=ok.reduce((s,o)=>s+(o.profit||0),0);T.net=T.profit-fixedTotal();
+  const D=k=>own.reduce((s,o)=>s+((o.d&&o.d[k])||0),0),base=own.reduce((s,o)=>s+o.sale+o.refund,0);
+  const shipNet=D('buyerShip')+D('shipSub')+D('shipPaid')+D('returnShip');
+  const rows=[['成交手續費',D('commission')],['免運服務費（每單 $60）',D('service')],['金流與系統處理費（刷卡、付款）',D('payfee')]];
+  if(D('other'))rows.push(['其他（AMS、優惠券、賠償）',D('other')]);rows.push(['運費（自付部分，含退貨運費）',shipNet]);if(D('inv'))rows.push(['蝦皮代開發票（另外收）',D('inv')]);
+  const pm=new Map();own.forEach(o=>{const k=o.method||'其他',p=pm.get(k)||{n:0,amt:0,fee:0,rates:new Set()};p.n++;p.amt+=o.sale+o.refund;p.fee+=(o.d&&o.d.payfee)||0;if(o.rate)p.rates.add(o.rate);pm.set(k,p)});
+  v.fees={base,total:rows.reduce((s,r)=>s+r[1],0),rows,pay:[...pm.entries()].sort((a,b)=>b[1].amt-a[1].amt).map(([k,p])=>[k,p.n,p.amt,p.fee,[...p.rates].join('、')]),
+    ship:[['買家付的運費',D('buyerShip')],['蝦皮補助運費',D('shipSub')],['蝦皮代付運費（物流費）',D('shipPaid')],['退貨運費',D('returnShip')],['合計（你實際負擔）',shipNet]],orders:own.length};
+}
+function editForm(o){
+  const d=o.d||{commission:0,service:0,payfee:0,other:0,buyerShip:0,shipSub:0,shipPaid:0,returnShip:0,inv:-N(LS.get('invfee',2))};
+  const f=(k,l,val)=>`<label class="ef"><span>${l}</span><input type="number" step="1" data-ef="${k}" value="${val??0}"></label>`;
+  const lines=(o.lines.length?o.lines:[]).map((l,i)=>`<tr data-li="${i}"><td><input data-lf="0" value="${esc(l[0])}"></td><td><input data-lf="4" value="${esc(l[4]||'')}"></td><td><input class="sm" type="number" step="0.01" data-lf="1" value="${l[1]}"></td><td><input class="sm" type="number" data-lf="2" value="${l[2]}"></td><td><input class="sm" type="number" step="0.01" data-lf="3" value="${l[3]}"></td><td><button data-ldel="${i}">刪除</button></td></tr>`).join('');
+  return `<div class="editbox"><h3>修改這筆（存檔後會同步到 Google Sheet）</h3>
+  <div class="efgrid">${f('sale','商品金額',o.sale)}${f('refund','退款（負數）',o.refund)}${f('commission','成交手續費',d.commission)}${f('service','其他服務費',d.service)}${f('payfee','金流與系統處理費',d.payfee)}
+  ${f('buyerShip','買家支付運費',d.buyerShip)}${f('shipPaid','蝦皮代付運費（負數）',d.shipPaid)}${f('shipSub','蝦皮補助運費',d.shipSub)}${f('returnShip','退貨運費（你負擔，負數）',d.returnShip)}${f('other','其他',d.other||0)}${f('inv','代開發票（負數）',d.inv)}</div>
+  <h3 style="margin-top:10px">文菖出貨單品項（退回的商品請刪除）</h3>
+  <div class="tbl"><table class="mini edit"><thead><tr><th>品名</th><th>規格型號</th><th>數量</th><th>金額</th><th>成本（未稅）</th><th></th></tr></thead><tbody id="ef-lines">${lines}</tbody></table></div>
+  <label class="ef" style="margin-top:8px;max-width:520px"><span>備註</span><input data-note value="${esc(o.note||'')}"></label>
+  <div class="actions" style="margin-top:10px"><button id="ef-add">＋ 新增品項</button><button class="primary" id="ef-save">儲存修改</button><button id="ef-cancel">取消</button>${edits[o.id]?'<button id="ef-reset">還原成原始資料</button>':''}</div></div>`;
+}
+function wireEdit(o){
+  const box=$('.editbox');if(!box)return;
+  const read=()=>{const g=k=>N(box.querySelector(`[data-ef="${k}"]`).value);
+    const lines=[...box.querySelectorAll('#ef-lines tr')].map(tr=>{const q=i=>tr.querySelector(`[data-lf="${i}"]`).value;return [q(0),N(q(1)),N(q(2)),N(q(3)),q(4),'']});
+    return {sale:g('sale'),refund:g('refund'),d:{commission:g('commission'),service:g('service'),payfee:g('payfee'),other:g('other'),buyerShip:g('buyerShip'),shipSub:g('shipSub'),shipPaid:g('shipPaid'),returnShip:g('returnShip'),inv:g('inv')},lines,note:box.querySelector('[data-note]').value}};
+  box.addEventListener('click',e=>e.stopPropagation());
+  box.querySelectorAll('[data-ldel]').forEach(b=>b.onclick=()=>{b.closest('tr').remove()});
+  $('#ef-add').onclick=()=>{$('#ef-lines').insertAdjacentHTML('beforeend','<tr><td><input data-lf="0"></td><td><input data-lf="4"></td><td><input class="sm" type="number" step="0.01" data-lf="1" value="1"></td><td><input class="sm" type="number" data-lf="2" value="0"></td><td><input class="sm" type="number" step="0.01" data-lf="3" value="0"></td><td><button onclick="this.closest(\'tr\').remove()">刪除</button></td></tr>')};
+  $('#ef-cancel').onclick=()=>{st.editing=null;rOrders()};
+  const r=$('#ef-reset');if(r)r.onclick=()=>{delete edits[o.id];LS.set('edits',edits);st.editing=null;afterEdit()};
+  $('#ef-save').onclick=()=>{edits[o.id]=read();LS.set('edits',edits);st.editing=null;afterEdit()};
+}
+async function saveEditsCloud(){const url=LS.get('url',SHEET_URL);if(!url)return;
+  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'edits',edits:Object.entries(edits).map(([k,v])=>[k,JSON.stringify(v)])})});const j=await r.json();if(!j.ok)throw new Error(j.error||'')}
+  catch(e){msg('修改沒有存到 Google Sheet：'+esc(e.message||'連線失敗'),'err')}}
+function afterEdit(){saveEditsCloud();
+  if(st.live)st.vm=liveVM();else{applyEdits(st.vm);vmRecalc(st.vm)}
+  render();
+  if(st.live)saveSoon();else if(st.vm.isMonth!==false)saveSnapshotOnly();
+}
+async function saveSnapshotOnly(){ // editing a saved month: update that month's record in Google Sheet
+  const url=LS.get('url',SHEET_URL);if(!url)return;const v=st.vm,T=v.T,now=new Date();
+  v.savedAt=`${ymd(now)} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}（手動修改）`;
+  const summary=[T.orders,Math.round(T.payout),Math.round(T.cost),Math.round(T.profit),fixedTotal(),Math.round(T.profit-fixedTotal()),T.carriedMatched||0,v.po.length,v.ps.length];
+  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'snapshot',month:v.month,summary,snapshot:JSON.stringify(v),orderRows:orderRows(v)})});
+    const j=await r.json();if(!j.ok)throw new Error(j.error||'');$('#cloud').textContent=`已把 ${v.month} 的修改存到 Google Sheet。`}
+  catch(e){msg('修改沒有存到 Google Sheet：'+esc(e.message||'連線失敗'),'err')}
+}
+function orderRows(v){return v.orders.map(o=>{const d=o.d||{};return [v.month,o.date,o.paid,o.id,o.bline||'',(o.lines||[]).map(l=>`${l[0]}${l[4]?' '+l[4]:''}×${l[1]}`).join('、')||o.items,
+  o.sale,o.refund,d.commission??'',d.service??'',d.payfee??'',(o.d?d.buyerShip+d.shipSub+d.shipPaid+d.returnShip:o.rs)||0,d.inv??'',o.payout,o.ok?o.cost:'',o.ok?o.profit:'',
+  o.flags.map(x=>x[0]).join('；')+(o.note?'；'+o.note:''),o.edited?'是':''].map(x=>x==null?'':String(x))})}
 function detail(o){
   const d=o.d,row=(t,v,sub)=>`<tr${sub?' class="sub"':''}><td>${t}</td><td class="r ${v<0?'neg':''}">${v==null?'':fm(v)}</td></tr>`;
   const ship=d?d.buyerShip+d.shipSub+d.shipPaid+d.returnShip:o.rs, fee=d?d.commission+d.service+d.payfee:(o.chg??o.fee);
@@ -963,12 +1054,16 @@ function detail(o){
     ${row('<b>實際入帳</b>',o.payout)}
     ${d&&d.inv?row('蝦皮代開發票（另外收）',d.inv):''}
     <tr class="tot"><td>蝦皮總共扣</td><td class="r neg">${fm(total)}${base>0?`　（${(Math.abs(total)/base*100).toFixed(1)}%）`:''}</td></tr></tbody></table>`;
-  const right=o.lines.length?`<table class="mini"><thead><tr><th>品項</th><th class="r">數量</th><th class="r">金額</th><th class="r">成本</th></tr></thead><tbody>
-    ${o.lines.map(l=>`<tr><td>${esc(l[0])}</td><td class="r">${l[1]}</td><td class="r">${fm(l[2])}</td><td class="r">${hide(l[3])}</td></tr>`).join('')}
-    <tr class="tot"><td>利潤（未稅）</td><td></td><td></td><td class="r ${st.show&&o.profit<0?'neg':''}">${o.ok?hide(o.profit):''}</td></tr></tbody></table>
-    <p class="help">利潤＝（實際入帳${d&&d.inv?' − 代開發票':''}）÷ 1.05 − 成本</p>`:'<p class="help">沒有對到出貨單，看不到品項成本。</p>';
+  const shp=(o.shp||[]).length?`<table class="mini"><thead><tr><th>蝦皮訂單內容</th><th class="r">數量</th><th class="r">單價</th></tr></thead><tbody>
+    ${o.shp.map(i=>`<tr${i[3]?' class="retl"':''}><td>${esc(i[0])}${i[3]?`<div class="miss">退貨 ${i[3]} → 文菖出貨單要刪除這品項</div>`:''}</td><td class="r">${i[1]}</td><td class="r">${fm(i[2])}</td></tr>`).join('')}</tbody></table>`:'';
+  const right=o.lines.length?`<table class="mini"><thead><tr><th>文菖出貨單（3-1）</th><th>規格型號</th><th class="r">數量</th><th class="r">金額</th><th class="r">成本</th></tr></thead><tbody>
+    ${o.lines.map(l=>`<tr${l[6]?' class="retl"':''}><td>${esc(l[0])}${l[6]?`<div class="miss">退貨 ${l[6]}，這部分成本不計</div>`:''}</td><td class="help">${esc(l[4]||'')}</td><td class="r">${l[1]}</td><td class="r">${fm(l[2])}</td><td class="r">${hide(l[3])}</td></tr>`).join('')}
+    <tr class="tot"><td>利潤（未稅）</td><td></td><td></td><td></td><td class="r ${st.show&&o.profit<0?'neg':''}">${o.ok?hide(o.profit):''}</td></tr></tbody></table>
+    <p class="help">利潤＝（實際入帳${d&&d.inv?' − 代開發票':''}）÷ 1.05 − 成本</p>`:'<p class="help">沒有對到出貨單，看不到品項成本。可以按「修改這筆」自己補上品項。</p>';
   const pay=o.method?`<div class="payline">付款方式：<b>${esc(o.method)}</b>${o.rate?`　金流費率 ${esc(o.rate)}`:''}${d?`　金流費 ${fm(d.payfee)}`:''}</div>`:'';
-  return `${pay}<div class="det"><div><h3>蝦皮扣款明細</h3>${left}</div><div><h3>品項與成本</h3>${right}</div></div>`;
+  const editBtn=`<button class="primary" data-edit="${esc(o.id)}">修改這筆</button>`;
+  if(st.editing===o.id)return pay+editForm(o);
+  return `${pay}<div class="det"><div><h3>蝦皮扣款明細</h3>${left}</div><div><h3>商品對照</h3>${shp}<div style="height:8px"></div>${right}</div></div><div class="actions" style="margin-top:8px">${editBtn}${o.note?`<span class="help">備註：${esc(o.note)}</span>`:''}</div>`;
 }
 const SORTS=[['sale','商品金額'],['refund','退款'],['commission','成交費'],['service','服務費'],['payfee','金流費'],['ship','運費'],['inv','發票'],['ded','扣款合計'],['payout','實際入帳'],['cost','成本'],['profit','利潤']];
 function sv(o,k){const d=o.d||{};switch(k){
@@ -995,7 +1090,7 @@ function rOrders(){
   <div class="tbl"><table class="orders"><thead><tr><th>日期／訂單號碼</th><th>商品</th>${SORTS.map(([k,n])=>`<th class="r sort" data-s="${k}" title="點一下排序">${n}${arrow(k)}</th>`).join('')}</tr></thead><tbody>${
   list.map(o=>{const t=ded(o),b=o.sale+o.refund,op=st.open.has(o.id),d=o.d;
   return `<tr data-id="${esc(o.id)}" class="clk ${o.ok?(o.profit<0?'loss':isCheck(o)?'chk':''):'unm'}">
-  <td class="num">${op?'▾':'▸'} ${md2(o.date)}<div class="oid"><span class="lbl">蝦皮</span>${cp(o.id)}</div><div class="oid"><span class="lbl">文菖</span>${o.bline?cp(o.bline):'<span class="miss">沒有出貨單</span>'}</div></td>
+  <td class="num">${op?'▾':'▸'} ${md2(o.date)}<div class="oid"><span class="lbl">蝦皮</span>${cp(o.id)}</div><div class="oid"><span class="lbl">文菖</span>${o.bline?cp(o.bline):'<span class="miss">沒有出貨單</span>'}</div><button class="mini-edit" data-edit="${esc(o.id)}">修改</button></td>
   <td class="items">${esc(o.items)}${o.missing?`<div class="miss">缺進價：${esc(o.missing)}</div>`:''}${o.flags.length?`<div>${pills(o.flags)}</div>`:''}</td>
   <td class="r">${fm(o.sale)}</td><td class="r ${o.refund?'neg':''}">${o.refund?fm(o.refund):''}</td>
   ${d?[d.commission,d.service,d.payfee,d.buyerShip+d.shipSub+d.shipPaid+d.returnShip,d.inv].map(x=>`<td class="r ${x<0?'neg':''}">${x?fm(x):'0'}</td>`).join(''):`<td class="r" colspan="5">${fm(o.chg??o.fee)}<div class="help">上次保留</div></td>`}
@@ -1005,6 +1100,8 @@ function rOrders(){
   }</tbody></table></div><p class="help">顯示 ${list.length} 筆。紅底＝沒對到、粉紅底＝賠錢、黃底＝要看一下。扣款合計＝成交費＋服務費＋金流費＋運費＋代開發票，% 是佔商品金額（扣退款後）。${!st.show?'成本、利潤要先打開小眼睛才能排序。':''}</p>`;
   $('#panel').querySelectorAll('.chip').forEach(b=>b.onclick=()=>{st.filter=b.dataset.f;render()});
   $('#panel').querySelectorAll('th.sort').forEach(th=>th.onclick=()=>{const k=th.dataset.s;st.sort=st.sort&&st.sort.k===k?{k,dir:-st.sort.dir}:{k,dir:['refund','commission','service','payfee','ship','inv','ded'].includes(k)?1:-1};rOrders()});
+  $('#panel').querySelectorAll('[data-edit]').forEach(b=>b.onclick=e=>{e.stopPropagation();st.editing=b.dataset.edit;st.open.add(b.dataset.edit);rOrders()});
+  if(st.editing){const eo=st.vm.orders.find(x=>x.id===st.editing);if(eo)wireEdit(eo)}
   $('#panel').querySelectorAll('tr.clk').forEach(tr=>tr.onclick=()=>{const id=tr.dataset.id;st.open.has(id)?st.open.delete(id):st.open.add(id);const y=window.scrollY,sc=$('.tbl').scrollTop;rOrders();$('.tbl').scrollTop=sc;window.scrollTo(0,y)});
   const qi=$('#q');qi.oninput=()=>{st.q=qi.value;clearTimeout(qi._t);qi._t=setTimeout(()=>{render();const n=$('#q');n.focus();n.setSelectionRange(n.value.length,n.value.length)},250)};
 }
@@ -1020,6 +1117,7 @@ function advice(t){
   if(/金額不同/.test(t))return '蝦皮金額跟出貨單不一樣（量差價或改過價），APP 用品項配對。確認是同一筆就按「確認沒問題」。';
   return '請確認這筆，沒問題就按「確認沒問題」。';
 }
+function goEdit(id){st.tab='orders';st.filter='all';st.q=id;st.open=st.open||new Set();st.open.add(id);st.editing=id;render();$('#tabs').scrollIntoView({behavior:'smooth'})}
 function rPending(){
   const v=st.vm,{po}=v,need=v.ps.filter(s=>s.lv==='warn'),cancel=v.ps.filter(s=>s.lv==='cancel'),next=v.ps.filter(s=>s.lv==='keep'),iss=issueOrders(v);
   const rm=k=>st.live?`<button data-rm="${k}">移除</button>`:'';
@@ -1032,12 +1130,12 @@ function rPending(){
   <h2>③ 沒對到出貨單的蝦皮訂單（${po.length}）</h2>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">實際入帳</th><th>原因</th><th>可能是這張</th><th></th></tr></thead><tbody>${
   po.map(o=>`<tr class="unm"><td class="num">${md2(o.date)}</td><td>${cp(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
-  <td class="items">${o.cand.map(c=>`<div>${esc(c)}</div>`).join('')||'—'}</td><td>${rm('o'+esc(o.id))}</td></tr>`).join('')||'<tr><td colspan="6">沒有，全部都對上了。</td></tr>'
+  <td class="items">${o.cand.map(c=>`<div>${esc(c)}</div>`).join('')||'—'}</td><td><button class="primary" data-goedit="${esc(o.id)}">修改／補品項</button> ${rm('o'+esc(o.id))}</td></tr>`).join('')||'<tr><td colspan="6">沒有，全部都對上了。</td></tr>'
   }</tbody></table></div>
   <h2>④ 有對到，但要確認一下的訂單（${iss.length}）</h2>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>單號</th><th>商品</th><th class="r">實際入帳</th><th>原因和要做的事</th><th></th></tr></thead><tbody>${
   iss.map(o=>{const fl=o.flags.filter(x=>x[1]!=='info'&&!/缺進價/.test(x[0]));return `<tr class="chk"><td class="num">${md2(o.date)}</td><td><div class="oid"><span class="lbl">蝦皮</span>${cp(o.id)}</div><div class="oid"><span class="lbl">文菖</span>${o.bline?cp(o.bline):''}</div></td><td class="items">${esc(o.items)}</td><td class="r">${fm(o.payout)}</td>
-  <td style="min-width:240px">${pills(fl)}<div class="help" style="margin-top:4px">${esc(advice(fl.map(x=>x[0]).join(' ')))}</div></td><td>${st.live?`<button class="primary" data-ok="${esc(o.id)}">確認沒問題</button>`:''}</td></tr>`}).join('')||'<tr><td colspan="6">沒有。</td></tr>'
+  <td style="min-width:240px">${pills(fl)}<div class="help" style="margin-top:4px">${esc(advice(fl.map(x=>x[0]).join(' ')))}</div></td><td><button data-goedit="${esc(o.id)}">修改</button> ${st.live?`<button class="primary" data-ok="${esc(o.id)}">確認沒問題</button>`:''}</td></tr>`}).join('')||'<tr><td colspan="6">沒有。</td></tr>'
   }</tbody></table></div>
   <h2>⑤ 開單超過 60 天還沒入帳的出貨單（${need.length}）</h2>
   <div class="tbl"><table><thead><tr><th>開單日</th><th>出貨單號</th><th class="r">金額</th><th>商品</th><th></th></tr></thead><tbody>${
@@ -1048,6 +1146,7 @@ function rPending(){
   next.map(s=>`<tr><td class="num">${md2(s.date)}</td><td>${cp(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}${s.since?`<div class="help">保留自 ${esc(s.since)}</div>`:''}</td></tr>`).join('')
   }</tbody></table></div></details>`;
   rMissing($('#miss-box'));
+  $('#panel').querySelectorAll('[data-goedit]').forEach(b=>b.onclick=()=>goEdit(b.dataset.goedit));
   $('#panel').querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>{confirmed.add(b.dataset.ok);LS.set('confirmed',[...confirmed]);st.vm=liveVM();render();saveSoon()});
   $('#panel').querySelectorAll('[data-deleted]').forEach(b=>b.onclick=()=>{deletedSlips.add(b.dataset.deleted);LS.set('deletedSlips',[...deletedSlips]);st.removed.add('s'+b.dataset.deleted);st.vm=liveVM();render();saveSoon()});
   $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);st.vm=liveVM();render();saveSoon()});
@@ -1115,7 +1214,7 @@ function payload(){
   const pendingLines=[];ps.forEach(s=>s.lines.forEach(l=>pendingLines.push([s.bline,ymd(s.date),l.prodno,l.name,l.spec,l.qty,l.price,l.sum,l.sourp0??l.sourp,s.since||M.key,s.why])));
   const summary=[T.orders,Math.round(T.payout),Math.round(T.cost),Math.round(T.profit),fixedTotal(),Math.round(T.profit-fixedTotal()),T.carriedMatched,po.length,ps.length];
   const now=new Date();const snap={...v,savedAt:`${ymd(now)} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`};
-  return {key:LS.get('key',''),month:M.key,done,pendingOrders,pendingLines,summary,snapshot:JSON.stringify(snap)};
+  return {key:LS.get('key',''),month:M.key,done,pendingOrders,pendingLines,summary:[T.orders,Math.round(v.T.payout),Math.round(v.T.cost),Math.round(v.T.profit),fixedTotal(),Math.round(v.T.profit-fixedTotal()),T.carriedMatched,po.length,ps.length],snapshot:JSON.stringify(snap),orderRows:orderRows(v)};
 }
 async function save(auto){
   if(!st.live)return;const M0=st.M;
