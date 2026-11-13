@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/13-B</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/13-D</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -732,15 +732,19 @@ function readBuf(f){return new Promise((ok,no)=>{const r=new FileReader();r.onlo
 async function openBook(f,pw){
   let u8=await readBuf(f);
   if(isCFB(u8)){
-    let wb=null;try{wb=XLSX.read(u8,{type:'array'})}catch(e){}
+    let wb=null;try{wb=XLSX.read(u8,{type:'array',nodim:true})}catch(e){}
     if(wb&&wb.SheetNames.length)return wb;
     if(!pw)throw new Error(`「${f.name}」有密碼，請先在設定填「訂單報表密碼」`);
     u8=await decryptOffice(u8,pw);
   }
-  return XLSX.read(u8,{type:'array'});
+  return XLSX.read(u8,{type:'array',nodim:true});
 }
+// some Shopee exports say the sheet is only "A1" big; work out the real size from the cells themselves
+function fixRef(ws){if(!ws||!XLSX.utils.decode_cell)return ws;let R=0,C=0,any=false;
+  for(const k in ws){if(k[0]==='!')continue;const c=XLSX.utils.decode_cell(k);if(c.r>R)R=c.r;if(c.c>C)C=c.c;any=true}
+  if(any)ws['!ref']=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:R,c:C}});return ws}
 function rowsOf(wb,word){
-  for(const n of wb.SheetNames){const r=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null,raw:true});if(r.some(x=>x&&x.includes&&x.includes(word)))return r}
+  for(const n of wb.SheetNames){fixRef(wb.Sheets[n]);const r=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null,raw:true});if(r.some(x=>x&&x.includes&&x.includes(word)))return r}
   return null;
 }
 function span(dates){const v=dates.filter(Boolean).sort((a,b)=>a-b);return v.length?[v[0],v[v.length-1]]:null}
@@ -755,7 +759,7 @@ function matStatus(){if(st.master)setCard('mat',`✓ 記住 ${st.masterAt} 上�
 function checkCover(){matStatus();
   const R=ranges();
   if(st.inc){const c=coverText([st.inc.start,st.inc.end],R.inc);setCard('inc',`✓ ${st.inc.orders.length} 張訂單\n${c.t}`,true,!c.ok)}
-  if(st.ord){const c=coverText(span(st.ordInfo),R.ord);setCard('ord',`✓ ${Object.keys(st.ord).length} 張訂單\n${c.t}`,true,!c.ok)}
+  if(st.ord){const c=coverText(span(st.ordInfo),R.ord);const em=(st.ordEmpty||[]).length?`\n⚠ ${st.ordEmpty.join('、')} 是空的（在「待出貨」分頁匯出的），請改從「全部」分頁匯出`:'';setCard('ord',`✓ ${Object.keys(st.ord).length} 張訂單\n${c.t}${em}`,true,!c.ok||!!em)}
   if(st.cost){const c=coverText(span(st.cost.map(l=>l.date)),R.cost);setCard('cost',`✓ ${new Set(st.cost.map(l=>l.bline)).size} 張出貨單\n${c.t}`,true,!c.ok)}
 }
 function bind(k,handler){
@@ -775,7 +779,7 @@ bind('inc',async files=>{
   if(!r)throw new Error('這不是蝦皮進帳報表');st.inc=parseIncomeRows(r);
 });
 bind('ord',async files=>{
-  const map={},dates=[],meta=new Map(),cx=new Map();
+  const map={},dates=[],meta=new Map(),cx=new Map(),empty=[];
   for(const f of files){
     const wb=await openBook(f,LS.get('pw',''));const r=rowsOf(wb,'商品名稱');
     if(!r)throw new Error(`「${f.name}」不是蝦皮訂單報表`);
@@ -783,8 +787,11 @@ bind('ord',async files=>{
     parseOrderMeta(r).forEach(o=>{if(!meta.has(o.id))meta.set(o.id,o)});
     parseCancelled(r).forEach(o=>{if(!cx.has(o.id))cx.set(o.id,o)});
     const h=r.findIndex(x=>x&&x.includes('訂單成立日期'));const i=r[h].indexOf('訂單成立日期');
+    const n=r.slice(h+1).filter(x=>x&&x[i]).length;if(!n)empty.push(f.name);
     r.slice(h+1).forEach(x=>{if(x&&x[i])dates.push(toDate(String(x[i]).slice(0,10)))});
   }
+  st.ordEmpty=empty;
+  if(empty.length===files.length)throw new Error(`「${empty.join('、')}」裡面沒有任何訂單。檔名有 toship 的是在「待出貨」分頁匯出的，請到「我的銷售」→「全部」分頁重新匯出（檔名會是 Order.all）。`);
   st.ord=map;st.ordInfo=dates;st.ordMeta=[...meta.values()];st.cancelled=[...cx.values()];
 });
 bind('mat',async files=>{
