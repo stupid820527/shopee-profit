@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/13-A</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/13-B</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -650,7 +650,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const ymd=d=>d?`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`:'';
 const md=d=>d?`${d.getMonth()+1}/${d.getDate()}`:'';
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
-const st={inc:null,ord:null,ordInfo:[],cost:null,costInfo:[],cloud:null,res:null,tab:'orders',filter:'all',q:'',removed:new Set()};
+const st={inc:null,ord:null,ordInfo:[],cost:null,costInfo:[],cloud:null,res:null,tab:'orders',filter:'all',q:'',removed:new Set(LS.get('removed',[]))};
 const FIXED_DEFAULT=[['薪資',30000],['全勤獎金',2000],['包貨獎金',3000],['勞健保、勞退（公司負擔）',6500],['寄貨車趟（油錢、車子）',4000],['紙箱、耗材',2500]];
 let fixedItems=LS.get('fixedItems',FIXED_DEFAULT);
 const fixedTotal=()=>fixedItems.reduce((s,r)=>s+N(r[1]),0);
@@ -716,7 +716,9 @@ async function loadCloud(){
     const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key','')));
     const j=await r.json();if(!j.ok)throw new Error(j.error||'讀取失敗');
     st.cloud=j;
-    if(j.edits){edits={};j.edits.forEach(r=>{try{edits[String(r[0])]=JSON.parse(r[1])}catch(e){}});LS.set('edits',edits)}
+    if(j.edits){edits={};j.edits.forEach(r=>{try{const k=String(r[0]),v=JSON.parse(r[1]);
+      if(k==='__confirmed__')confirmed=new Set(v);else if(k==='__deleted__')deletedSlips=new Set(v);else if(k==='__removed__')st.removed=new Set(v);else edits[k]=v}catch(e){}});
+      LS.set('edits',edits);LS.set('confirmed',[...confirmed]);LS.set('deletedSlips',[...deletedSlips]);LS.set('removed',[...st.removed])}
     fillHist(j);
     if(j.fixed&&j.fixed.length){fixedItems=j.fixed.map(r=>[String(r[0]),N(r[1])]);LS.set('fixedItems',fixedItems)}
     if(j.overrides){ovr={};j.overrides.forEach(r=>{if(r[0]&&r[2]!=='')ovr[String(r[0])]={name:r[1],cost:N(r[2]),at:r[3]}});LS.set('costOverrides2',ovr)}
@@ -1038,7 +1040,7 @@ function wireEdit(o){
   $('#ef-save').onclick=()=>{st.lastEdit=o.id;edits[o.id]=read();LS.set('edits',edits);st.editing=null;afterEdit()};
 }
 async function saveEditsCloud(){const url=LS.get('url',SHEET_URL);if(!url)return;
-  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'edits',edits:Object.entries(edits).map(([k,v])=>[k,JSON.stringify(v)])})});const j=await r.json();if(!j.ok)throw new Error(j.error||'')}
+  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'edits',edits:[...Object.entries(edits).map(([k,v])=>[k,JSON.stringify(v)]),['__confirmed__',JSON.stringify([...confirmed])],['__deleted__',JSON.stringify([...deletedSlips])],['__removed__',JSON.stringify([...st.removed])]]})});const j=await r.json();if(!j.ok)throw new Error(j.error||'')}
   catch(e){msg('修改沒有存到 Google Sheet：'+esc(e.message||'連線失敗'),'err')}}
 function afterEdit(){saveEditsCloud();const keep=st.lastEdit;
   if(st.live)st.vm=liveVM();else{applyEdits(st.vm);vmRecalc(st.vm)}
@@ -1166,9 +1168,9 @@ function rPending(){
   rMissing($('#miss-box'));
   $('#panel').querySelectorAll('[data-goedit]').forEach(b=>b.onclick=()=>goEdit(b.dataset.goedit));
   $('#panel').querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>goFill(b.dataset.fill));
-  $('#panel').querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>{confirmed.add(b.dataset.ok);LS.set('confirmed',[...confirmed]);st.vm=liveVM();render();saveSoon()});
-  $('#panel').querySelectorAll('[data-deleted]').forEach(b=>b.onclick=()=>{deletedSlips.add(b.dataset.deleted);LS.set('deletedSlips',[...deletedSlips]);st.removed.add('s'+b.dataset.deleted);st.vm=liveVM();render();saveSoon()});
-  $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);st.vm=liveVM();render();saveSoon()});
+  $('#panel').querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>{confirmed.add(b.dataset.ok);LS.set('confirmed',[...confirmed]);saveEditsCloud();st.vm=liveVM();render();saveSoon()});
+  $('#panel').querySelectorAll('[data-deleted]').forEach(b=>b.onclick=()=>{deletedSlips.add(b.dataset.deleted);LS.set('deletedSlips',[...deletedSlips]);st.removed.add('s'+b.dataset.deleted);LS.set('removed',[...st.removed]);saveEditsCloud();st.vm=liveVM();render();saveSoon()});
+  $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);LS.set('removed',[...st.removed]);saveEditsCloud();st.vm=liveVM();render();saveSoon()});
 }
 function rFixed(){
   $('#panel').innerHTML=`<p class="help">每個月的固定開銷，可以隨時改金額、新增或刪除項目。改了會存到 Google Sheet，淨利馬上重算。</p>
