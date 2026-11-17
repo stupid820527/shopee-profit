@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/13-D</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/17-A</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -854,7 +854,7 @@ function run(){
   if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
   st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
   const notes=[];
-  if(!M.isMonth)notes.push(`查看 ${M.key}（${M.days} 天）<b>下單</b>的訂單：還沒完成的也算，金額用訂單報表裡的蝦皮手續費（剛下單還沒有手續費的，用 6%＋$60＋金流費率估）。不存檔、不影響每月對帳，固定成本照天數分攤。`);
+  if(!M.isMonth)notes.push(`查看 ${M.key}（${M.days} 天）<b>下單</b>的訂單：還沒完成的也算，金額用訂單報表裡的蝦皮手續費（剛下單還沒有手續費的，用 6%＋$60＋金流費率估）。會存成「最新一次結果」讓其他電腦也看得到，不影響每月對帳，固定成本照天數分攤。`);
   else if(st.estimated)notes.push(`沒有上傳進帳報表：用訂單報表裡「${M.key} 完成」的訂單和蝦皮手續費來算，跟實際入帳通常只差幾元。要完全精準再上傳進帳報表。`);
   if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
   msg(notes.join('<br>'),notes.length?'warn':'');
@@ -862,6 +862,7 @@ function run(){
   st.coverOk=coverOk();
   if(M.isMonth&&!st.coverOk)msg(($('#msg').innerHTML?$('#msg').innerHTML+'<br>':'')+'檔案日期沒有涵蓋整個月，這次<b>不會自動存檔</b>，避免蓋掉正確的月結紀錄。確定要存請按「存檔（月結）」。','warn');
   clearTimeout(st.autoT);if(M.isMonth&&st.coverOk)st.autoT=setTimeout(()=>save(true),600);
+  st.src='live';latestSoon();
 }
 function coverOk(){const R=ranges();
   const ok=(sp,w)=>!sp||(sp[0]<=w[0]&&sp[1]>=new Date(+w[1]-2*DAY));
@@ -910,25 +911,26 @@ function liveVM0(){
 function fillHist(j){
   const ms=(j.log||[]).map(r=>r[0]).filter(Boolean).sort().reverse();
   $('#hist-wrap').hidden=!ms.length;
-  $('#i-hist').innerHTML=`<option value="">${st.cost&&st.ord?'這次上傳的計算結果':'選一個月份'}</option>`+ms.map(m=>`<option value="${esc(m)}">${esc(m)} 月結</option>`).join('');
+  $('#i-hist').innerHTML=`<option value="">${st.cost&&st.ord?'這次上傳的計算結果':'最後一次上傳的結果'}</option>`+ms.map(m=>`<option value="${esc(m)}">${esc(m)} 月結</option>`).join('');
 }
 $('#i-hist').addEventListener('change',async()=>{
   const m=$('#i-hist').value;
-  if(!m){if(st.ord&&st.cost){msg('');run()}return}
+  if(!m){msg('');if(st.ord&&st.cost)run();else{st.live=false;showSnapshot()}return}
   const url=LS.get('url',SHEET_URL);$('#cloud').textContent=`正在讀取 ${m} 的月結…`;
   try{const r=await fetch(url+(url.includes('?')?'&':'?')+'key='+encodeURIComponent(LS.get('key',''))+'&snap='+encodeURIComponent(m));
     const j=await r.json();if(!j.ok||!j.snapshot)throw new Error(j.error||'這個月份沒有存結果（舊版存的只有總數）');
-    st.vm=JSON.parse(j.snapshot);st.live=false;st.editing=null;clearTimeout(st.autoT);st.tab='orders';
+    st.vm=JSON.parse(j.snapshot);st.live=false;st.src='month';st.editing=null;clearTimeout(st.autoT);st.tab='orders';
     $('#result').hidden=false;msg(`正在看 <b>${esc(m)}</b> 的月結（${esc(st.vm.savedAt)} 存的）。點訂單可以「修改這筆」，改完會更新這個月在 Google Sheet 的紀錄。要回到這次上傳的計算，選最上面那一項。`);
     $('#cloud').textContent='';render();
   }catch(e){$('#cloud').textContent='讀不到 '+m+'：'+e.message}
 });
 function showSnapshot(){
-  const snap=st.cloud&&st.cloud.snapshot;
+  const c=st.cloud||{},snap=c.latest||c.snapshot;
   if(!snap){if(!st.live)$('#result').hidden=true;return}
   try{st.vm=JSON.parse(snap)}catch(e){return}
-  st.live=false;$('#result').hidden=false;
-  if(!$('#msg').textContent)msg(`目前顯示的是 ${esc(st.vm.savedAt)} 存的 <b>${esc(st.vm.month)}</b> 對帳結果。上傳新的檔案就會重新計算並取代。`);
+  st.live=false;st.src=c.latest?'latest':'month';$('#result').hidden=false;
+  if(!$('#msg').textContent)msg(c.latest?`目前顯示的是 <b>${esc(st.vm.savedAt)}</b> 最後一次上傳的結果（${esc(st.vm.month)}）。任何一台電腦上傳新的檔案，就會換成新的結果。要看以前的月結，用上面的「看已存的月結」選月份。`
+    :`目前顯示的是 ${esc(st.vm.savedAt)} 存的 <b>${esc(st.vm.month)}</b> 對帳結果。上傳新的檔案就會重新計算並取代。`);
   render();
 }
 
@@ -1052,7 +1054,17 @@ async function saveEditsCloud(){const url=LS.get('url',SHEET_URL);if(!url)return
 function afterEdit(){saveEditsCloud();const keep=st.lastEdit;
   if(st.live)st.vm=liveVM();else{applyEdits(st.vm);vmRecalc(st.vm)}
   render();if(keep)showRow(keep,false);
-  if(st.live)saveSoon();else if(st.vm.isMonth!==false)saveSnapshotOnly();
+  if(st.live){saveSoon();latestSoon()}else if(st.src==='latest')saveLatest();else if(st.vm.isMonth!==false)saveSnapshotOnly();
+}
+// 最新一次結果：每次上傳計算完就存到 Google Sheet，其他電腦打開就看這一份（不看日期）
+function latestSoon(){clearTimeout(st.latT);st.latT=setTimeout(saveLatest,1200)}
+async function saveLatest(){
+  const url=LS.get('url',SHEET_URL);if(!url||!st.vm)return;const now=new Date();
+  const snap={...st.vm,savedAt:`${ymd(now)} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`};
+  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'latest',snapshot:JSON.stringify(snap)})});
+    const j=await r.json();if(!j.ok)throw new Error(j.error||'');
+    if(!st.vm.isMonth||!st.live)$('#cloud').textContent=`已存到 Google Sheet（${snap.savedAt}）。其他電腦打開會看到這次的結果，以最後一次上傳的為主。`}
+  catch(e){msg('這次結果沒有存到 Google Sheet，其他電腦會看不到：'+esc(e.message||'連線失敗')+'。如果剛更新過 Apps Script，請確認有「部署新版本」。','err')}
 }
 async function saveSnapshotOnly(){ // editing a saved month: update that month's record in Google Sheet
   const url=LS.get('url',SHEET_URL);if(!url)return;const v=st.vm,T=v.T,now=new Date();
@@ -1246,7 +1258,7 @@ function payload(){
 }
 async function save(auto){
   if(!st.live)return;const M0=st.M;
-  if(!st.M.isMonth){$('#cloud').textContent='這是查看幾天的結果，不會存到 Google Sheet，也不影響每月對帳。整個月對帳時才會存檔。';return}
+  if(!st.M.isMonth){saveLatest();return}
   const url=LS.get('url',SHEET_URL);if(!url){if(!auto){$('#settings').open=true;msg('請先在設定填 Google Sheet 連結。','warn')}return}
   const b=$('#b-save');b.disabled=true;b.textContent='儲存中…';
   try{
