@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/17-A</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/23-A</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -234,7 +234,8 @@ function parseCostRows(rows){
     if(!r||r[ix('BLINE')]==null||r[ix('BLINE')]==='')continue;
     out.push({prodno:String(r[ix('PRODNO')]??'').trim(),name:String(r[ix('CHINESE')]??r[ix('PRODNO')]??'').replace(/\s+/g,' ').trim(),
       spec:String(r[ix('SPEC')]??'').trim(),qty:N(r[ix('ACCOUNT')]),price:N(r[ix('PRICE')]),sum:N(r[ix('SUM')]),
-      date:toDate(r[ix('DATIME')]),bline:String(r[ix('BLINE')]),sourp:N(r[ix('SOURP')])});
+      date:toDate(r[ix('DATIME')]),bline:String(r[ix('BLINE')]),sourp:N(r[ix('SOURP')]),
+      oid:(r.map(v=>String(v??'').toUpperCase().match(/\b\d{6}[0-9A-Z]{8}\b/)).find(m=>m&&/[A-Z]/.test(m[0]))||[''])[0]}); // 蝦皮訂單編號（如果出貨明細有帶這欄）
   }
   return out;
 }
@@ -365,7 +366,7 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
     l.cost=l.bad?0:l.sourp*l.qty; // no cost found anywhere: counted as 0 and flagged so it gets filled in
     let s=slips.get(l.bline);
     if(!s){s={bline:l.bline,date:l.date,total:0,cost:0,lines:[],used:false,carried:false,since:l.since||''};slips.set(l.bline,s)}
-    if(l.carried)s.carried=true;
+    if(l.carried)s.carried=true;if(l.oid&&!s.oid)s.oid=l.oid;
     s.total+=l.sum;s.cost+=l.cost;s.lines.push(l);
   }
   slips.forEach(s=>{s.total=Math.round(s.total);s.sig=s.lines.map(l=>l.prodno+'#'+l.qty).sort().join('|');
@@ -374,12 +375,17 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
   const minSlip=slipArr.filter(s=>!s.carried).reduce((m,s)=>s.date&&(!m||s.date<m)?s.date:m,null);
   const byTotal=new Map();slipArr.forEach(s=>{(byTotal.get(s.total)||byTotal.set(s.total,[]).get(s.total)).push(s)});
   const ords=[...income.orders].sort((a,b)=>(a.date-b.date)||a.id.localeCompare(b.id));
+  // 出貨單上有寫蝦皮訂單編號：直接對，100% 不會錯
+  const byOid=new Map();slipArr.forEach(s=>{if(s.oid&&!byOid.has(s.oid))byOid.set(s.oid,s)});
+  for(const o of ords){const s=byOid.get(String(o.id).toUpperCase());if(s&&!s.used){o.slip=s;o.lag=s.date&&o.date?dd(s.date,o.date):0;o.score=10;o.byId=true;s.used=true}}
   // global matching: closest dates first, so an early order cannot take a later order's invoice
   const pairs=[];
   for(const o of ords){
     const items=orderItems&&orderItems[o.id];
     const keys=[...new Set([Math.round(o.orig),Math.round(o.orig+o.promo),Math.round(o.orig+o.promo+o.refund)])].filter(k=>k>0);
+    if(o.slip)continue;
     for(const s of keys.flatMap(k=>byTotal.get(k)||[])){
+      if(s.used||(s.oid&&s.oid!==String(o.id).toUpperCase()))continue; // 寫了別張訂單編號的出貨單不能拿
       if(!s.date||!o.date)continue;const lag=dd(s.date,o.date);
       if(lag<-1||lag>10)continue;
       pairs.push({o,s,lag,sc:items?Math.round(scoreSlip(s,items)):0});
@@ -398,7 +404,7 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
       const target=o.refund<0&&items.some(i=>i.ret>0)?o.orig+o.promo+o.refund:o.orig;
       if(o.refund<0&&items.some(i=>i.ret>0))items=items.map(i=>({...i,qty:i.qty-i.ret})).filter(i=>i.qty>0); // partial return: compare only the kept items
       if(!items.length)continue;
-      for(const s of free){const lag=dd(s.date,o.date);if(lag<-1||lag>4)continue;
+      for(const s of free){if(s.oid&&s.oid!==String(o.id).toUpperCase())continue;const lag=dd(s.date,o.date);if(lag<-1||lag>4)continue;
         if(Math.abs(s.total-target)>Math.max(100,target*0.2))continue;
         if(sameContent(s,items))p2.push({o,s,lag,d:Math.abs(s.total-target),kept:target!==o.orig});}
     }
@@ -466,7 +472,7 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
   // an invoice whose items match another Shopee order (paid earlier, later, or not yet) belongs to that order: never suggest it
   const owned=(s,o)=>allOrders.some(a=>a.id!==o.id&&a.date&&s.date&&dd(s.date,a.date)>=-1&&dd(s.date,a.date)<=10&&a.items&&sameContent(s,a.items));
   const unmatched=ords.filter(o=>!o.slip&&!o.noSlipRefund).map(o=>{
-    const cand=unused.filter(s=>s.date&&o.date&&dd(s.date,o.date)>=-1&&dd(s.date,o.date)<=6&&Math.abs(s.total-o.orig)<=Math.max(60,o.orig*0.1)&&!owned(s,o))
+    const cand=unused.filter(s=>s.date&&o.date&&dd(s.date,o.date)>=-1&&dd(s.date,o.date)<=6&&Math.abs(s.total-o.orig)<=Math.max(60,o.orig*0.1)&&!owned(s,o)&&!(s.oid&&s.oid!==String(o.id).toUpperCase()))
       .sort((a,b)=>Math.abs(a.total-o.orig)-Math.abs(b.total-o.orig)).slice(0,2);
     let why=o.carried?'上次保留，這次還是沒對到':minSlip&&o.date<minSlip?'3-1 出貨明細沒有這天的資料（3-1 出貨明細日期範圍不夠早）':o.refund!==0?'有退款，金額變動':'找不到同金額的出貨單（開單金額不同、合併開單或沒開單）';
     return {...o,why,cand};
@@ -481,9 +487,16 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
     else if(s.carried)why='上次保留，還沒入帳，轉到下次對帳';
     // an invoice that matches a cancelled Shopee order should be deleted in the system
     // only invoices still waiting (not ones from an earlier period), and only when the items really are the same
-    const cx=lv==='drop'?null:cancelled.find(k=>!k.used&&k.date&&s.date&&dd(s.date,k.date)>=-1&&dd(s.date,k.date)<=5&&Math.abs(k.act-s.total)<=Math.max(50,k.act*0.2)&&sameContent(s,k.items));
-    // not if a live order (e.g. the customer re-ordered) with the same items could own this invoice
-    const live=cx&&allOrders.some(a=>!matchedIds.has(a.id)&&a.date&&dd(s.date,a.date)>=-1&&dd(s.date,a.date)<=10&&a.items&&sameContent(s,a.items));
+    let cx=null,live=false;
+    if(s.oid){cx=cancelled.find(k=>!k.used&&String(k.id).toUpperCase()===s.oid)||null} // 出貨單寫的訂單編號就是取消的那張
+    else if(lv!=='drop'){
+      cx=cancelled.find(k=>!k.used&&k.date&&s.date&&dd(s.date,k.date)>=-1&&dd(s.date,k.date)<=5&&Math.abs(k.act-s.total)<=Math.max(50,k.act*0.2)&&sameContent(s,k.items));
+      // 客人重複下單、取消其中一張：同內容的出貨單張數 沒有比 還有效的同內容訂單多，就不是多開的，不能叫你刪
+      if(cx){const near=(d)=>d&&dd(s.date,d)>=-1&&dd(s.date,d)<=10;
+        const L=allOrders.filter(a=>near(a.date)&&a.items&&sameContent(s,a.items)).length;
+        const C=slipArr.filter(x=>x.sig===s.sig&&x.date&&Math.abs(dd(x.date,s.date))<=10).length;
+        live=C<=L;}
+    }
     if(cx&&!live){cx.used=true;why=`蝦皮訂單 ${cx.id} 已取消（不成立），請在系統刪除這張出貨單`;lv='cancel';s.cancelId=cx.id}
     return {...s,why,lv};
   });
