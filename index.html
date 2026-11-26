@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-C</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-D</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -1142,14 +1142,27 @@ async function saveSnapshotOnly(){ // editing a saved month: update that month's
 function orderRows(v){return v.orders.map(o=>{const d=o.d||{};return [v.month,o.date,o.paid,o.id,o.bline||'',(o.lines||[]).map(l=>`${l[0]}${l[4]?' '+l[4]:''}×${l[1]}`).join('、')||o.items,
   o.sale,o.refund,d.commission??'',d.service??'',d.payfee??'',(o.d?d.buyerShip+d.shipSub+d.shipPaid+d.returnShip:o.rs)||0,d.inv??'',o.payout,o.ok?o.cost:'',o.ok?o.profit:'',
   o.flags.map(x=>x[0]).join('；')+(o.note?'；'+o.note:''),o.edited?'是':''].map(x=>x==null?'':String(x))})}
+// 活動日：成交手續費比平常多（12/11 前 6%→8%，12/11 起 6.5%→10.5%）。用那天大部分訂單的手續費率判斷
+const ACT_NEW='2026/12/11';
+const actThr=date=>String(date)>=ACT_NEW?9:7.2;
+const comRate=o=>o.d&&o.sale>0&&o.d.commission<0?Math.abs(o.d.commission)/o.sale*100:null;
+function actInfo(o){const v=st.vm;
+  if(!v._act||v._actN!==v.orders.length){const g={};v.orders.forEach(x=>{const r=comRate(x);if(r!=null)(g[x.date]=g[x.date]||[]).push(r)});
+    v._act={};for(const k in g){const a=g[k].sort((p,q)=>p-q);if(a.length>=3)v._act[k]=a[Math.floor(a.length/2)]>=actThr(k)}v._actN=v.orders.length}
+  const r=comRate(o);const day=v._act[o.date];const act=day!=null?day:(r!=null&&r>=actThr(o.date));
+  const nw=String(o.date)>=ACT_NEW;
+  return {act,rate:r,txt:act?`活動日：成交手續費多 ${nw?'4%（6.5%＋4%＝10.5%）':'2%（6%＋2%＝8%）'}`:`平常日：成交手續費 ${nw?'6.5%':'6%'}`};}
 function detail(o){
   const d=o.d,row=(t,v,sub)=>`<tr${sub?' class="sub"':''}><td>${t}</td><td class="r ${v<0?'neg':''}">${v==null?'':fm(v)}</td></tr>`;
   const ship=d?d.buyerShip+d.shipSub+d.shipPaid+d.returnShip:o.rs, fee=d?d.commission+d.service+d.payfee:(o.chg??o.fee);
-  const total=ded(o),base=o.sale+o.refund;
+  const total=ded(o),base=o.sale+o.refund,pc1=v=>base>0&&v?`<span class="help">　${(Math.abs(v)/base*100).toFixed(1)}%</span>`:'';
+  const A=d?actInfo(o):null;
+  const row2=(t,v,sub)=>`<tr${sub?' class="sub"':''}><td>${t}</td><td class="r ${v<0?'neg':''}">${v==null?'':fm(v)}${pc1(v)}</td></tr>`;
   const left=`<table class="mini"><tbody>
     ${row('商品金額',o.sale)}${o.refund?row('退款',o.refund):''}
     ${row('<b>運費總支付</b>',ship)}${d?row('買家支付運費',d.buyerShip,1)+row('蝦皮代付運費',d.shipPaid,1)+row('蝦皮補助運費',d.shipSub,1)+(d.returnShip?row('退貨運費',d.returnShip,1):''):''}
-    ${row('<b>成交＆金流手續費</b>',fee)}${d?row('成交手續費',d.commission,1)+row('其他服務費（免運 $60）',d.service,1)+row('金流與系統處理費',d.payfee,1):''}
+    ${A?`<tr><td colspan="2"><span class="pill ${A.act?'p-warn':'p-info'}">${A.txt}</span></td></tr>`:''}
+    ${row2('<b>成交＆金流手續費</b>',fee)}${d?row2('成交手續費',d.commission,1)+row2('其他服務費（免運）',d.service,1)+row2('金流與系統處理費',d.payfee,1):''}
     ${d&&d.other?row('其他（AMS、優惠券、賠償）',d.other):''}
     ${row('<b>實際入帳</b>',o.payout)}
     ${d&&d.inv?row('蝦皮代開發票（另外收）',d.inv):''}
