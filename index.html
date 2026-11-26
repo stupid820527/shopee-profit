@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-B</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-C</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -347,7 +347,7 @@ function incomeFromOrders(meta,start,end,byCreated){
       buyerShip:o.buyerShip,shipSub:o.shipSub,shipPaid,comp:0,est:true,status:o.status,feeEst:!!o.feeEst};
   });
 }
-function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=48000,target=0.07,cancelled=[],allOrders=[]}){
+function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=48000,target=0.07,cancelled=[],allOrders=[],links={}}){
   const lines=cost.map(l=>{
     // order: system cost > product cost file (NEWPR, else STANDP x SOUPRI) > cost typed in the app (0 = free item)
     let sourp=l.sourp,src='sys';
@@ -375,9 +375,17 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
   const minSlip=slipArr.filter(s=>!s.carried).reduce((m,s)=>s.date&&(!m||s.date<m)?s.date:m,null);
   const byTotal=new Map();slipArr.forEach(s=>{(byTotal.get(s.total)||byTotal.set(s.total,[]).get(s.total)).push(s)});
   const ords=[...income.orders].sort((a,b)=>(a.date-b.date)||a.id.localeCompare(b.id));
+  // 你手動補的出貨單號：最優先（可以一張訂單補好幾張出貨單，用逗號隔開）
+  for(const o of ords){const L=links[o.id];if(!L)continue;
+    const bl=String(L).split(/[\s,，、+]+/).filter(Boolean),ss=bl.map(b=>slips.get(b)).filter(x=>x&&!x.used);
+    if(!ss.length){o.linkMissing=bl.join('、');continue}
+    let x=ss[0];
+    if(ss.length>1){const ls=ss.flatMap(y=>y.lines);x={bline:ss.map(y=>y.bline).join('+'),date:ss[0].date,total:ss.reduce((a,y)=>a+y.total,0),cost:ss.reduce((a,y)=>a+y.cost,0),lines:ls,carried:ss.some(y=>y.carried),since:ss[0].since,
+      sig:ls.map(l=>l.prodno+'#'+l.qty).sort().join('|'),items:ss.map(y=>y.items).join('、'),missing:ss.flatMap(y=>y.missing)}}
+    ss.forEach(y=>y.used=true);x.used=true;o.slip=x;o.lag=x.date&&o.date?dd(x.date,o.date):0;o.score=10;o.byLink=true;}
   // 出貨單上有寫蝦皮訂單編號：直接對，100% 不會錯
   const byOid=new Map();slipArr.forEach(s=>{if(s.oid&&!byOid.has(s.oid))byOid.set(s.oid,s)});
-  for(const o of ords){const s=byOid.get(String(o.id).toUpperCase());if(s&&!s.used){o.slip=s;o.lag=s.date&&o.date?dd(s.date,o.date):0;o.score=10;o.byId=true;s.used=true}}
+  for(const o of ords){if(o.slip)continue;const s=byOid.get(String(o.id).toUpperCase());if(s&&!s.used){o.slip=s;o.lag=s.date&&o.date?dd(s.date,o.date):0;o.score=10;o.byId=true;s.used=true}}
   // global matching: closest dates first, so an early order cannot take a later order's invoice
   const pairs=[];
   for(const o of ords){
@@ -437,13 +445,14 @@ function analyze({cost,income,orderItems,overrides={},master={},invFee=0,fixed=4
       if(o.refund!==0)o.flags.push(o.rev<=0?['全額退貨，成本不計','info']:o.slipNet?['部分退款（出貨單已扣退貨）','info']:o.itemRet?['部分退貨，退回的品項成本不計','info']:['部分退款，成本照比例扣','warn']);
       o.profit=Math.round((o.payout-(o.carried?0:invFee))/TAX-o.cost);
       o.missing=o.keep>0?o.slip.missing:[];
+      if(o.byLink)o.flags.push([`手動指定出貨單${Math.abs(o.slip.total-o.rev)>=1?`（系統 ${o.slip.total}、蝦皮 ${Math.round(o.rev)}）`:''}`,'info']);
       if(o.byContent)o.flags.push([`金額不同（系統 ${o.slip.total}），依品項配對`,'info']);
       if(o.carried)o.flags.push(['上次保留，這次對到','info']);
       if(!o.carried&&!o.slip.carried&&minSlip&&o.date<minSlip)o.flags.push(['訂單早於3-1 出貨明細，可能對錯','warn']);
-      else if(Math.abs(o.lag)>4)o.flags.push([`開單晚 ${o.lag} 天，請核對`,'warn']);
+      else if(Math.abs(o.lag)>4&&!o.byLink)o.flags.push([`開單晚 ${o.lag} 天，請核對`,'warn']);
       const g=grp[+o.date+'|'+Math.round(o.orig+o.promo)];
       const sigs=new Set(g.filter(x=>x.slip).map(x=>x.slip.sig));
-      if(sigs.size>1&&!(orderItems&&orderItems[o.id]&&o.score>=3))o.flags.push([orderItems&&orderItems[o.id]?'品項比不出來，請核對':'同天同金額、品項不同，請核對','warn']);
+      if(!o.byLink&&sigs.size>1&&!(orderItems&&orderItems[o.id]&&o.score>=3))o.flags.push([orderItems&&orderItems[o.id]?'品項比不出來，請核對':'同天同金額、品項不同，請核對','warn']);
       if(o.missing.length)o.flags.push(['缺進價，利潤還不準','bad']);
       for(const l of o.slip.lines){
         const share=o.slip.total?l.sum/o.slip.total:0;
@@ -674,6 +683,7 @@ let ovr=LS.get('costOverrides2',{});
 let edits=LS.get('edits',{}); // hand-made corrections per Shopee order: {id:{sale,refund,d,lines,note}}
 let confirmed=new Set(LS.get('confirmed',[])); // ④ orders the user already checked
 let deletedSlips=new Set(LS.get('deletedSlips',[])); // 3-1 invoices the user deleted in the system
+let links=LS.get('links',{}); // 手動補的出貨單號 {蝦皮訂單編號:出貨單號}
 try{localStorage.removeItem('master')}catch(e){}
 try{const m=JSON.parse(localStorage.getItem('master2')||'null');if(m){st.master=m.map;st.masterAt=m.at}}catch(e){} // {商品編號:{cost,name,at}}
 const ovNums=()=>Object.fromEntries(Object.entries(ovr).map(([k,v])=>[k,v.cost]));
@@ -730,7 +740,7 @@ async function loadCloud(){
     const j=await r.json();if(!j.ok)throw new Error(j.error||'讀取失敗');
     st.cloud=j;
     if(j.edits){edits={};j.edits.forEach(r=>{try{const k=String(r[0]),v=JSON.parse(r[1]);
-      if(k==='__confirmed__')confirmed=new Set(v);else if(k==='__deleted__')deletedSlips=new Set(v);else if(k==='__removed__')st.removed=new Set(v);else edits[k]=v}catch(e){}});
+      if(k==='__confirmed__')confirmed=new Set(v);else if(k==='__deleted__')deletedSlips=new Set(v);else if(k==='__removed__')st.removed=new Set(v);else if(k==='__links__')links=v;else edits[k]=v}catch(e){}});LS.set('links',links);
       LS.set('edits',edits);LS.set('confirmed',[...confirmed]);LS.set('deletedSlips',[...deletedSlips]);LS.set('removed',[...st.removed])}
     fillHist(j);
     if(j.fixed&&j.fixed.length){fixedItems=j.fixed.map(r=>[String(r[0]),N(r[1])]);LS.set('fixedItems',fixedItems)}
@@ -865,7 +875,7 @@ function run(){
   }
   const {orders,cost,M}=inputs();
   const fixed=fixedTotal();
-  st.res=analyze({cost,income:{orders,start:M.start,end:M.end},orderItems:st.ord,overrides:ovNums(),master:st.master||{},invFee:N(LS.get('invfee',2)),fixed,target:0.07,cancelled:(st.cancelled||[]).map(k=>({...k,used:false})),allOrders:(st.ordMeta||[]).filter(o=>!CANCEL.test(o.status)).map(o=>({id:o.id,date:o.date,items:st.ord[o.id]}))});
+  st.res=analyze({cost,income:{orders,start:M.start,end:M.end},orderItems:st.ord,overrides:ovNums(),master:st.master||{},invFee:N(LS.get('invfee',2)),fixed,target:0.07,cancelled:(st.cancelled||[]).map(k=>({...k,used:false})),allOrders:(st.ordMeta||[]).filter(o=>!CANCEL.test(o.status)).map(o=>({id:o.id,date:o.date,items:st.ord[o.id]})),links});
   // system now has its own cost for some filled-in items: drop those
   const fixedNow=Object.keys(ovr).filter(k=>st.cost.some(l=>l.prodno===k&&l.sourp>0)||(st.master&&st.master[k]>0));
   if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
@@ -927,7 +937,8 @@ function liveVM0(){
       shp:((st.ord&&st.ord[o.id])||[]).map(i=>[i.name,i.qty,i.price,i.ret||0]),
       chg:o.payout-o.rev-(('shipPaid' in o)?(o.buyerShip+o.shipSub+o.shipPaid+o.returnShip):o.returnShip),
       cost:ok?o.cost:null,profit:ok?o.profit:null,missing:(o.missing||[]).join('、'),flags:o.flags,confirmed:confirmed.has(o.id),carried:!!o.carried,ok}}),
-    po:po.map(o=>({date:ymd(o.date),id:o.id,payout:o.payout,why:o.why,since:o.since||'',cand:o.cand.map(s=>`${s.bline}（${md(s.date)}・${fm(s.total)}）${s.items}`)})),
+    po:po.map(o=>{const stt=((st.ordMeta||[]).find(m=>m.id===o.id)||{}).status||'';const wait=/待出貨|未付款|待付款/.test(stt);
+      return {date:ymd(o.date),id:o.id,payout:o.payout,wait,link:links[o.id]||'',why:o.linkMissing?`補的出貨單號 ${o.linkMissing} 在這次的 3-1 出貨明細裡找不到（日期範圍不夠，或單號打錯）`:wait?`蝦皮狀態「${stt}」：還沒出貨，等開出貨單後再對`:o.why,since:o.since||'',cand:o.cand.map(s=>`${s.bline}（${md(s.date)}・${fm(s.total)}）${s.items}`)}}),
     ps:ps.map(s=>({date:ymd(s.date),bline:s.bline,total:s.total,items:s.items,why:s.why,lv:s.lv,since:s.since||''})),
     missing:r.missing.map(m=>({prodno:m.prodno,name:m.name,spec:m.spec,price:m.price,qty:m.qty})),
     fees:feeBreakdown(r.orders,N(LS.get('invfee',2)))};
@@ -1041,6 +1052,28 @@ function vmRecalc(v){
   v.fees={base,total:rows.reduce((s,r)=>s+r[1],0),rows,pay:[...pm.entries()].sort((a,b)=>b[1].amt-a[1].amt).map(([k,p])=>[k,p.n,p.amt,p.fee,[...p.rates].join('、')]),
     ship:[['買家付的運費',D('buyerShip')],['蝦皮補助運費',D('shipSub')],['蝦皮代付運費（物流費）',D('shipPaid')],['退貨運費',D('returnShip')],['合計（你實際負擔）',shipNet]],orders:own.length};
 }
+// 手動補出貨單號：先檢查有沒有重複、存不存在、金額差多少
+function linkSlip(id,val){
+  const bl=String(val||'').split(/[\s,，、+]+/).filter(Boolean);
+  if(!bl.length){if(links[id]){delete links[id];LS.set('links',links);saveEditsCloud();run()}return}
+  const probs=[];let tot=0;
+  for(const b of bl){
+    const ls=(st.cost||[]).filter(l=>l.bline===b);
+    if(!ls.length){probs.push(`出貨單 ${b} 在這次上傳的 3-1 出貨明細裡找不到（單號打錯，或 3-1 的日期範圍沒包含）`);continue}
+    tot+=ls.reduce((s,l)=>s+l.sum,0);
+    const other=Object.entries(links).find(([k,v])=>k!==id&&String(v).split(/[\s,，、+]+/).includes(b));
+    if(other)probs.push(`出貨單 ${b} 已經手動補給訂單 ${other[0]}`);
+    const m=st.res&&st.res.orders.find(o=>o.id!==id&&o.slip&&String(o.slip.bline).split('+').includes(b));
+    if(m&&!other)probs.push(`出貨單 ${b} 已經自動對到訂單 ${m.id}`);
+  }
+  const o=st.res&&st.res.orders.find(x=>x.id===id);
+  if(o&&tot&&Math.abs(tot-(o.orig+o.promo+o.refund))>=1)probs.push(`金額不一樣：出貨單合計 ${fm(Math.round(tot))}，蝦皮商品金額 ${fm(Math.round(o.orig+o.promo+o.refund))}`);
+  if(probs.length&&!confirm(probs.join('\n')+'\n\n確定還是要把這張訂單對到 '+bl.join('、')+' 嗎？（原本對到的訂單會變成沒對到）'))return;
+  // 同一張出貨單只能給一張訂單：從別的訂單的手動補單號拿掉
+  for(const k of Object.keys(links))if(k!==id){const rest=String(links[k]).split(/[\s,，、+]+/).filter(x=>x&&!bl.includes(x));if(rest.length)links[k]=rest.join(',');else delete links[k]}
+  links[id]=bl.join(',');LS.set('links',links);saveEditsCloud();run();
+  msg(`已把訂單 ${esc(id)} 對到出貨單 ${esc(bl.join('、'))}，會存到 Google Sheet，下次（包含月結）都會照這樣對。`,'');
+}
 // build 3-1 lines for an order that has no invoice: look up each Shopee item among all products in the 3-1 file
 function suggestLines(id){
   const its=st.ord&&st.ord[id];if(!its||!st.cost)return null;
@@ -1081,7 +1114,7 @@ function wireEdit(o){
     edits[o.id]=e;LS.set('edits',edits);st.editing=null;afterEdit()};
 }
 async function saveEditsCloud(){const url=LS.get('url',SHEET_URL);if(!url)return;
-  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'edits',edits:[...Object.entries(edits).map(([k,v])=>[k,JSON.stringify(v)]),['__confirmed__',JSON.stringify([...confirmed])],['__deleted__',JSON.stringify([...deletedSlips])],['__removed__',JSON.stringify([...st.removed])]]})});const j=await r.json();if(!j.ok)throw new Error(j.error||'')}
+  try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LS.get('key',''),action:'edits',edits:[...Object.entries(edits).map(([k,v])=>[k,JSON.stringify(v)]),['__confirmed__',JSON.stringify([...confirmed])],['__deleted__',JSON.stringify([...deletedSlips])],['__removed__',JSON.stringify([...st.removed])],['__links__',JSON.stringify(links)]]})});const j=await r.json();if(!j.ok)throw new Error(j.error||'')}
   catch(e){msg('修改沒有存到 Google Sheet：'+esc(e.message||'連線失敗'),'err')}}
 function afterEdit(){saveEditsCloud();const keep=st.lastEdit;
   if(st.live)st.vm=liveVM();else{applyEdits(st.vm);vmRecalc(st.vm)}
@@ -1198,11 +1231,14 @@ function rPending(){
   <div class="tbl"><table><thead><tr><th>開單日</th><th>出貨單號</th><th class="r">金額</th><th>商品</th><th>要做的事</th></tr></thead><tbody>${
   cancel.map(s=>`<tr class="unm"><td class="num">${md2(s.date)}</td><td>${cp(s.bline)}</td><td class="r">${fm(s.total)}</td><td class="items">${esc(s.items)}</td><td>${esc(s.why)}${s.cancelId?`<div>${cp(s.cancelId)}</div>`:''}${st.live?`<div style="margin-top:6px"><button class="primary" data-deleted="${esc(s.bline)}">已刪除</button></div>`:''}</td></tr>`).join('')||'<tr><td colspan="5">沒有。</td></tr>'
   }</tbody></table></div>
-  <h2>③ 沒對到出貨單的蝦皮訂單（${po.length}）</h2>
+  <h2>③ 沒對到出貨單的蝦皮訂單（${po.filter(o=>!o.wait).length}）</h2>
+  <p class="help">知道是哪張出貨單，就在「補出貨單號」填單號按「對上」（一張訂單開了好幾張出貨單，用逗號隔開）。APP 會檢查這張單有沒有已經對到別的訂單。</p>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">實際入帳</th><th>原因</th><th>可能是這張（已配給別的訂單的不會列出）</th><th></th></tr></thead><tbody>${
-  po.map(o=>`<tr class="unm"><td class="num">${md2(o.date)}</td><td>${cp(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
-  <td class="items">${o.cand.map(c=>`<div>${esc(c)}</div>`).join('')||'—'}</td><td>${st.ord&&st.ord[o.id]?`<button class="primary" data-fill="${esc(o.id)}">一鍵補齊</button> `:''}<button data-goedit="${esc(o.id)}">修改／補品項</button> ${rm('o'+esc(o.id))}</td></tr>`).join('')||'<tr><td colspan="6">沒有，全部都對上了。</td></tr>'
+  po.filter(o=>!o.wait).map(o=>`<tr class="unm"><td class="num">${md2(o.date)}</td><td>${cp(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}${o.since?`<div class="help">保留自 ${esc(o.since)}</div>`:''}</td>
+  <td class="items">${o.cand.map(c=>`<div>${esc(c)}</div>`).join('')||'—'}</td><td>${st.live?`<div class="linkbox" style="display:flex;gap:4px;margin-bottom:6px"><input data-linkin="${esc(o.id)}" value="${esc(o.link)}" placeholder="補出貨單號" style="width:110px;font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px"><button class="primary" data-link="${esc(o.id)}">對上</button></div>`:''}${st.ord&&st.ord[o.id]?`<button class="primary" data-fill="${esc(o.id)}">一鍵補齊</button> `:''}<button data-goedit="${esc(o.id)}">修改／補品項</button> ${rm('o'+esc(o.id))}</td></tr>`).join('')||'<tr><td colspan="6">沒有，全部都對上了。</td></tr>'
   }</tbody></table></div>
+  ${po.some(o=>o.wait)?`<details style="margin:8px 0 14px"><summary class="help" style="cursor:pointer">還沒出貨的訂單（${po.filter(o=>o.wait).length} 張，還沒開出貨單是正常的，不用處理，點開查看）</summary>
+  <div class="tbl" style="margin-top:8px"><table><thead><tr><th>訂單日</th><th>蝦皮訂單編號</th><th class="r">金額</th><th>狀態</th></tr></thead><tbody>${po.filter(o=>o.wait).map(o=>`<tr><td class="num">${md2(o.date)}</td><td>${cp(o.id)}</td><td class="r">${fm(o.payout)}</td><td>${esc(o.why)}</td></tr>`).join('')}</tbody></table></div></details>`:''}
   <h2>④ 有對到，但要確認一下的訂單（${iss.length}）</h2>
   <div class="tbl"><table><thead><tr><th>訂單日</th><th>單號</th><th>商品</th><th class="r">實際入帳</th><th>原因和要做的事</th><th></th></tr></thead><tbody>${
   iss.map(o=>{const fl=o.flags.filter(x=>x[1]!=='info'&&!/缺進價/.test(x[0]));return `<tr class="chk"><td class="num">${md2(o.date)}</td><td><div class="oid"><span class="lbl">蝦皮</span>${cp(o.id)}</div><div class="oid"><span class="lbl">文菖</span>${o.bline?cp(o.bline):''}</div></td><td class="items">${esc(o.items)}</td><td class="r">${fm(o.payout)}</td>
@@ -1219,6 +1255,7 @@ function rPending(){
   rMissing($('#miss-box'));
   $('#panel').querySelectorAll('[data-goedit]').forEach(b=>b.onclick=()=>goEdit(b.dataset.goedit));
   $('#panel').querySelectorAll('[data-fill]').forEach(b=>b.onclick=()=>goFill(b.dataset.fill));
+  $('#panel').querySelectorAll('[data-link]').forEach(b=>b.onclick=()=>linkSlip(b.dataset.link,$(`[data-linkin="${CSS.escape(b.dataset.link)}"]`).value));
   $('#panel').querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>{confirmed.add(b.dataset.ok);LS.set('confirmed',[...confirmed]);saveEditsCloud();st.vm=liveVM();render();saveSoon()});
   $('#panel').querySelectorAll('[data-deleted]').forEach(b=>b.onclick=()=>{deletedSlips.add(b.dataset.deleted);LS.set('deletedSlips',[...deletedSlips]);st.removed.add('s'+b.dataset.deleted);LS.set('removed',[...st.removed]);saveEditsCloud();st.vm=liveVM();render();saveSoon()});
   $('#panel').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{st.removed.add(b.dataset.rm);LS.set('removed',[...st.removed]);saveEditsCloud();st.vm=liveVM();render();saveSoon()});
