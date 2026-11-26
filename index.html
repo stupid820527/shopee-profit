@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-A</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-B</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -835,7 +835,8 @@ bind('cost',async files=>{
 function inputs(){
   const M=monthInfo();const C=M.isMonth?st.cloud:null; // a few days' check never mixes in or changes the monthly carry-over
   const doneO=new Set(),doneS=new Set();
-  if(C)C.done.forEach(r=>{if(r[0]!==M.key){if(r[1])doneO.add(String(r[1]));if(r[2])doneS.add(String(r[2]))}});
+  const delS=new Set(); // 按過「已刪除」的出貨單
+  if(C)C.done.forEach(r=>{if(r[0]!==M.key){if(r[1])doneO.add(String(r[1]));if(r[2]){if(r[1])doneS.add(String(r[2]));else delS.add(String(r[2]))}}});
   const inMonth=o=>!o.paid||(o.paid>=M.start&&o.paid<=M.end);
   const useInc=st.inc&&M.isMonth; // a few days' view always uses the order report: orders placed in those days
   const src=useInc?st.inc.orders:incomeFromOrders(st.ordMeta||[],M.start,M.end,!M.isMonth);
@@ -851,7 +852,8 @@ function inputs(){
   if(C)C.pendingLines.forEach(r=>{if(r[9]===M.key)return;const b=String(r[0]);if(!pend.has(b))pend.set(b,{since:r[9],lines:[]});
     pend.get(b).lines.push({bline:b,date:toDate(r[1]),prodno:String(r[2]),name:String(r[3]),spec:String(r[4]),qty:N(r[5]),price:N(r[6]),sum:N(r[7]),sourp:N(r[8])})});
   const cost=[];const have=new Set();
-  st.cost.forEach(l=>{if(doneS.has(l.bline)||deletedSlips.has(l.bline))return;const p=pend.get(l.bline);cost.push({...l,sourp0:l.sourp,carried:!!p,since:p?p.since:''});have.add(l.bline)});
+  // 按過「已刪除」但 3-1 出貨明細裡還在的：還是拿來對，如果對到有效訂單，代表按錯了，會自動還原
+  st.cost.forEach(l=>{if(doneS.has(l.bline))return;const wd=deletedSlips.has(l.bline)||delS.has(l.bline);const p=pend.get(l.bline);cost.push({...l,sourp0:l.sourp,carried:!!p,since:p?p.since:'',wasDeleted:wd});have.add(l.bline)});
   pend.forEach((p,b)=>{if(have.has(b)||doneS.has(b))return;p.lines.forEach(l=>cost.push({...l,sourp0:l.sourp,carried:true,since:p.since}))});
   return {orders,cost,M};
 }
@@ -867,8 +869,13 @@ function run(){
   // system now has its own cost for some filled-in items: drop those
   const fixedNow=Object.keys(ovr).filter(k=>st.cost.some(l=>l.prodno===k&&l.sourp>0)||(st.master&&st.master[k]>0));
   if(fixedNow.length){fixedNow.forEach(k=>delete ovr[k]);st.ovrDropped=fixedNow.length;LS.set('costOverrides2',ovr);saveOvr()}
+  // 按過「已刪除」的出貨單，這次對到還有效的蝦皮訂單：自動還原
+  const back=st.res.orders.filter(o=>o.slip&&o.slip.lines.some(l=>l.wasDeleted));
+  back.forEach(o=>{const b=o.slip.bline;deletedSlips.delete(b);st.removed.delete('s'+b);o.slip.lines.forEach(l=>l.wasDeleted=false)});
+  if(back.length){LS.set('deletedSlips',[...deletedSlips]);LS.set('removed',[...st.removed]);saveEditsCloud()}
   st.M=M;st.fixed=fixed;st.vm=liveVM();st.live=true;
   const notes=[];
+  if(back.length)notes.push('之前按了「已刪除」的出貨單 '+back.map(o=>`<b>${esc(o.slip.bline)}</b>（對到有效訂單 ${esc(o.id)}）`).join('、')+'，已自動還原並對上。');
   if(!M.isMonth)notes.push(`查看 ${M.key}（${M.days} 天）<b>下單</b>的訂單：還沒完成的也算，金額用訂單報表裡的蝦皮手續費（剛下單還沒有手續費的，用 6%＋$60＋金流費率估）。會存成「最新一次結果」讓其他電腦也看得到，不影響每月對帳，固定成本照天數分攤。`);
   else if(st.estimated)notes.push(`沒有上傳進帳報表：用訂單報表裡「${M.key} 完成」的訂單和蝦皮手續費來算，跟實際入帳通常只差幾元。要完全精準再上傳進帳報表。`);
   if(st.outside)notes.push(`進帳報表裡有 ${st.outside} 張不是 ${M.key} 入帳的訂單，這次沒有算進來。`);
@@ -908,7 +915,7 @@ function liveVM(){const v=liveVM0();applyEdits(v);vmRecalc(v);return v}
 function liveVM0(){
   const r=st.res,M=st.M,T=r.T;
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
-  const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline));
+  const ps=r.unpaid.filter(s=>s.lv!=='drop'&&!st.removed.has('s'+s.bline)&&!s.lines.some(l=>l.wasDeleted));
   return {month:M.key,isMonth:M.isMonth,days:M.days,mdays:M.mdays,savedAt:'',fixed:st.fixed,estimated:!!st.estimated,
     T:{orders:T.orders,payout:T.payout,fee:T.fee+T.returnShip-T.invoice,cost:T.cost,profit:T.profit,net:T.net,carriedMatched:T.carriedMatched,missingOrders:T.missingOrders},
     orders:r.orders.map(o=>{const ok=!!(o.slip||o.noSlipRefund);return {date:ymd(o.date),paid:ymd(o.paid),id:o.id,bline:o.slip?o.slip.bline:'',
@@ -1272,9 +1279,9 @@ function saveSoon(){if(!st.coverOk)return;clearTimeout(st.autoT);st.autoT=setTim
 function payload(){
   const r=st.res,M=st.M,T=r.T,v=st.vm;
   const po=r.unmatched.filter(o=>!st.removed.has('o'+o.id));
-  const ps=r.unpaid.filter(s=>s.lv!=='drop'&&s.lv!=='cancel'&&!st.removed.has('s'+s.bline));
+  const ps=r.unpaid.filter(s=>s.lv!=='drop'&&s.lv!=='cancel'&&!st.removed.has('s'+s.bline)&&!s.lines.some(l=>l.wasDeleted));
   const done=r.orders.filter(o=>o.slip||o.noSlipRefund).map(o=>[o.id,o.slip?o.slip.bline:'']);
-  r.unpaid.filter(s=>s.lv==='cancel'&&st.removed.has('s'+s.bline)).forEach(s=>done.push(['',s.bline])); // deleted in the system: never comes back
+  r.unpaid.filter(s=>(s.lv==='cancel'&&st.removed.has('s'+s.bline))||s.lines.some(l=>l.wasDeleted)).forEach(s=>done.push(['',s.bline])); // deleted in the system: never comes back
   const pendingOrders=po.map(o=>[o.id,ymd(o.date),ymd(o.paid),o.orig,o.promo,o.refund,o.returnShip,o.payout,o.since||M.key,o.why]);
   const pendingLines=[];ps.forEach(s=>s.lines.forEach(l=>pendingLines.push([s.bline,ymd(s.date),l.prodno,l.name,l.spec,l.qty,l.price,l.sum,l.sourp0??l.sourp,s.since||M.key,s.why])));
   const summary=[T.orders,Math.round(T.payout),Math.round(T.cost),Math.round(T.profit),fixedTotal(),Math.round(T.profit-fixedTotal()),T.carriedMatched,po.length,ps.length];
