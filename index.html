@@ -133,7 +133,7 @@ h2{font-size:16px;margin:6px 0 0}
 <body>
 <div class="wrap">
   <header>
-    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/23-B</span></h1>
+    <h1>蝦皮利潤對帳 <span class="tag" id="ver">版本 11/26-A</span></h1>
     <p class="sub">上傳三個檔案，自動配對每張訂單算利潤。沒對到的存到 Google Sheet，下次對帳接著配。檔案只在這台電腦計算。</p>
   </header>
 
@@ -736,7 +736,9 @@ async function loadCloud(){
     if(j.fixed&&j.fixed.length){fixedItems=j.fixed.map(r=>[String(r[0]),N(r[1])]);LS.set('fixedItems',fixedItems)}
     if(j.overrides){ovr={};j.overrides.forEach(r=>{if(r[0]&&r[2]!=='')ovr[String(r[0])]={name:r[1],cost:N(r[2]),at:r[3]}});LS.set('costOverrides2',ovr)}
     $('#cloud').textContent=`Google Sheet：上次保留訂單 ${j.pendingOrders.length} 筆、出貨單 ${new Set(j.pendingLines.map(x=>x[0])).size} 張。`;
-  }catch(e){$('#cloud').textContent='讀不到 Google Sheet：'+e.message+'（請檢查設定裡的網址）'}
+  }catch(e){const perm=/Failed to fetch|NetworkError|JSON|Unexpected token|<!DOCTYPE/i.test(String(e.message||e));
+    $('#cloud').innerHTML=perm?'<b style="color:#c00">讀不到 Google Sheet：這台電腦沒有權限。</b>請到 Apps Script「部署 → 管理部署作業 → 鉛筆」，把「誰可以存取」改成<b>「所有人」</b>，再部署新版本。':'讀不到 Google Sheet：'+esc(e.message)+'（請檢查設定裡的網址）';
+    const c=$('#cloud');c.hidden=false}
   run();
 }
 
